@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">NebulaBox</string>
+
+    <!-- tabs -->
+    <string name="tab_home">Home</string>
+    <string name="tab_profiles">Profiles</string>
+    <string name="tab_logs">Logs</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- status -->
+    <string name="status_stopped">Stopped</string>
+    <string name="status_starting">Starting…</string>
+    <string name="status_started">Connected</string>
+    <string name="status_stopping">Stopping…</string>
+    <string name="no_profile_selected">No profile selected</string>
+
+    <!-- actions -->
+    <string name="action_connect">Connect</string>
+    <string name="action_disconnect">Disconnect</string>
+    <string name="action_change_profile">Change profile</string>
+    <string name="action_manage">Manage</string>
+    <string name="action_groups">Proxy groups</string>
+    <string name="action_new_profile">New profile</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_import">Import link</string>
+    <string name="action_url_test">Test latency</string>
+    <string name="action_clear_logs">Clear logs</string>
+
+    <!-- traffic -->
+    <string name="title_traffic">Traffic</string>
+    <string name="label_uplink">Upload</string>
+    <string name="label_downlink">Download</string>
+    <string name="label_uptime">Uptime</string>
+    <string name="label_memory">Memory</string>
+    <string name="label_connections">Conns in/out</string>
+    <string name="label_profile_count">%1$d profiles</string>
+
+    <!-- profiles -->
+    <string name="empty_profiles_title">No profiles yet</string>
+    <string name="empty_profiles_body">Import a share link or add a server manually.</string>
+    <string name="import_hint">Paste one or more links. vless://, vmess://, trojan://, ss://, socks://, http://, hysteria2://, tuic://, wireguard://, ssh:// and sing-box JSON are all accepted.</string>
+    <string name="import_label">Share link</string>
+    <string name="import_failed">Could not parse that link</string>
+    <plurals name="profiles_imported">
+        <item quantity="one">%1$d profile imported</item>
+        <item quantity="other">%1$d profiles imported</item>
+    </plurals>
+
+    <!-- fields -->
+    <string name="field_name">Name</string>
+    <string name="field_protocol">Protocol</string>
+    <string name="field_server">Server</string>
+    <string name="field_port">Port</string>
+    <string name="field_uuid">UUID</string>
+    <string name="field_username">Username</string>
+    <string name="field_password">Password</string>
+    <string name="field_method">Method</string>
+    <string name="field_private_key">Private key</string>
+    <string name="field_peer_key">Peer public key</string>
+    <string name="field_transport">Transport (tcp, ws, http, grpc…)</string>
+    <string name="field_tls">TLS</string>
+    <string name="field_sni">Server name (SNI)</string>
+    <string name="field_insecure">Allow insecure</string>
+
+    <!-- settings -->
+    <string name="section_appearance">Appearance</string>
+    <string name="section_routing">Routing</string>
+    <string name="section_dns">DNS</string>
+    <string name="section_tunnel">Tunnel</string>
+    <string name="section_about">About</string>
+
+    <string name="setting_language">Language</string>
+    <string name="lang_system">System</string>
+    <string name="lang_english">English</string>
+    <string name="lang_persian">فارسی</string>
+
+    <string name="setting_theme">Theme</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
+    <string name="setting_dynamic_color">Material You colors</string>
+
+    <string name="setting_route_mode">Route mode</string>
+    <string name="route_global">Global (everything through the proxy)</string>
+    <string name="route_rule">Rule based</string>
+    <string name="route_direct">Direct (bypass)</string>
+    <string name="setting_bypass_lan">Bypass local network</string>
+    <string name="setting_bypass_cn">Bypass China</string>
+    <string name="setting_block_ads">Block ads</string>
+    <string name="setting_ipv6">IPv6 support</string>
+
+    <string name="setting_remote_dns">Remote DNS</string>
+    <string name="setting_direct_dns">Direct DNS</string>
+    <string name="setting_dns_strategy">DNS strategy</string>
+
+    <string name="setting_tcp_mux">TCP multiplexing</string>
+    <string name="setting_tcp_fast_open">TCP fast open</string>
+    <string name="setting_sniffing">Traffic sniffing</string>
+    <string name="setting_log_level">Log level</string>
+
+    <string name="about_version">Version</string>
+    <string name="about_engine">Tunnel engine</string>
+    <string name="about_engine_state">Engine state</string>
+    <string name="engine_ready">Ready</string>
+
+    <!-- errors -->
+    <string name="error_no_profile">No profile is selected</string>
+    <string name="error_config">Configuration error: %1$s</string>
+    <string name="error_tun">Could not create the VPN interface</string>
+    <string name="error_start">Could not start the tunnel</string>
+    <string name="error_no_engine">This build has no tunnel engine</string>
+
+    <string name="engine_missing_title">Tunnel engine not installed</string>
+    <string name="engine_missing_body">The sing-box core is built separately and was not present when this APK was assembled. Profiles and configuration work, but no traffic is tunneled.</string>
+    <string name="engine_missing_hint">Run scripts/build-libbox.sh, place libbox.aar in app/libs and rebuild.</string>
+
+    <string name="empty_groups">No proxy groups. Groups appear while a profile with a selector or URL-test outbound is connected.</string>
+    <string name="empty_logs">No log lines yet.</string>
+
+    <!-- notification -->
+    <string name="channel_tunnel">Tunnel</string>
+</resources>

@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">نبیولا‌باکس</string>
+
+    <!-- tabs -->
+    <string name="tab_home">خانه</string>
+    <string name="tab_profiles">پروفایل‌ها</string>
+    <string name="tab_logs">گزارش‌ها</string>
+    <string name="tab_settings">تنظیمات</string>
+
+    <!-- status -->
+    <string name="status_stopped">قطع</string>
+    <string name="status_starting">در حال اتصال…</string>
+    <string name="status_started">متصل</string>
+    <string name="status_stopping">در حال قطع…</string>
+    <string name="no_profile_selected">پروفایلی انتخاب نشده</string>
+
+    <!-- actions -->
+    <string name="action_connect">اتصال</string>
+    <string name="action_disconnect">قطع اتصال</string>
+    <string name="action_change_profile">تغییر پروفایل</string>
+    <string name="action_manage">مدیریت</string>
+    <string name="action_groups">گروه‌های پروکسی</string>
+    <string name="action_new_profile">پروفایل جدید</string>
+    <string name="action_edit">ویرایش</string>
+    <string name="action_delete">حذف</string>
+    <string name="action_save">ذخیره</string>
+    <string name="action_cancel">انصراف</string>
+    <string name="action_import">وارد کردن لینک</string>
+    <string name="action_url_test">سنجش تأخیر</string>
+    <string name="action_clear_logs">پاک کردن گزارش‌ها</string>
+
+    <!-- traffic -->
+    <string name="title_traffic">ترافیک</string>
+    <string name="label_uplink">آپلود</string>
+    <string name="label_downlink">دانلود</string>
+    <string name="label_uptime">مدت اتصال</string>
+    <string name="label_memory">حافظه</string>
+    <string name="label_connections">اتصال ورودی/خروجی</string>
+    <string name="label_profile_count">%1$d پروفایل</string>
+
+    <!-- profiles -->
+    <string name="empty_profiles_title">هنوز پروفایلی ندارید</string>
+    <string name="empty_profiles_body">یک لینک اشتراک وارد کنید یا سرور را دستی اضافه کنید.</string>
+    <string name="import_hint">یک یا چند لینک را بچسبانید. همهٔ قالب‌های vless://، vmess://، trojan://، ss://، socks://، http://، hysteria2://، tuic://، wireguard://، ssh:// و JSON سینگ‌باکس پشتیبانی می‌شوند.</string>
+    <string name="import_label">لینک اشتراک</string>
+    <string name="import_failed">این لینک قابل پردازش نبود</string>
+    <plurals name="profiles_imported">
+        <item quantity="one">%1$d پروفایل وارد شد</item>
+        <item quantity="other">%1$d پروفایل وارد شد</item>
+    </plurals>
+
+    <!-- fields -->
+    <string name="field_name">نام</string>
+    <string name="field_protocol">پروتکل</string>
+    <string name="field_server">سرور</string>
+    <string name="field_port">پورت</string>
+    <string name="field_uuid">شناسه (UUID)</string>
+    <string name="field_username">نام کاربری</string>
+    <string name="field_password">گذرواژه</string>
+    <string name="field_method">روش رمزنگاری</string>
+    <string name="field_private_key">کلید خصوصی</string>
+    <string name="field_peer_key">کلید عمومی طرف مقابل</string>
+    <string name="field_transport">لایهٔ انتقال (tcp، ws، http، grpc…)</string>
+    <string name="field_tls">TLS</string>
+    <string name="field_sni">نام سرور (SNI)</string>
+    <string name="field_insecure">اجازهٔ گواهی نامعتبر</string>
+
+    <!-- settings -->
+    <string name="section_appearance">ظاهر</string>
+    <string name="section_routing">مسیریابی</string>
+    <string name="section_dns">DNS</string>
+    <string name="section_tunnel">تونل</string>
+    <string name="section_about">درباره</string>
+
+    <string name="setting_language">زبان</string>
+    <string name="lang_system">زبان دستگاه</string>
+    <string name="lang_english">English</string>
+    <string name="lang_persian">فارسی</string>
+
+    <string name="setting_theme">پوسته</string>
+    <string name="theme_system">زبان دستگاه</string>
+    <string name="theme_light">روشن</string>
+    <string name="theme_dark">تیره</string>
+    <string name="setting_dynamic_color">رنگ‌های Material You</string>
+
+    <string name="setting_route_mode">حالت مسیریابی</string>
+    <string name="route_global">سراسری (همه از پروکسی)</string>
+    <string name="route_rule">قانون‌محور</string>
+    <string name="route_direct">مستقیم (دور زدن)</string>
+    <string name="setting_bypass_lan">رد کردن شبکهٔ محلی</string>
+    <string name="setting_bypass_cn">رد کردن چین</string>
+    <string name="setting_block_ads">مسدودسازی تبلیغات</string>
+    <string name="setting_ipv6">پشتیبانی IPv6</string>
+
+    <string name="setting_remote_dns">DNS از راه دور</string>
+    <string name="setting_direct_dns">DNS مستقیم</string>
+    <string name="setting_dns_strategy">راهبرد DNS</string>
+
+    <string name="setting_tcp_mux">تسهیم TCP</string>
+    <string name="setting_tcp_fast_open">باز شدن سریع TCP</string>
+    <string name="setting_sniffing">تشخیص نوع ترافیک</string>
+    <string name="setting_log_level">سطح گزارش</string>
+
+    <string name="about_version">نسخه</string>
+    <string name="about_engine">موتور تونل</string>
+    <string name="about_engine_state">وضعیت موتور</string>
+    <string name="engine_ready">آماده</string>
+
+    <!-- errors -->
+    <string name="error_no_profile">هیچ پروفایلی انتخاب نشده است</string>
+    <string name="error_config">خطای پیکربندی: %1$s</string>
+    <string name="error_tun">ساخت رابط VPN ناموفق بود</string>
+    <string name="error_start">راه‌اندازی تونل ناموفق بود</string>
+    <string name="error_no_engine">این نسخه موتور تونل ندارد</string>
+
+    <string name="engine_missing_title">موتور تونل نصب نیست</string>
+    <string name="engine_missing_body">هستهٔ سینگ‌باکس جداگانه ساخته می‌شود و هنگام ساخت این APK موجود نبوده است. پروفایل‌ها و پیکربندی کار می‌کنند، اما هیچ ترافیکی تونل نمی‌شود.</string>
+    <string name="engine_missing_hint">اسکریپت scripts/build-libbox.sh را اجرا کنید، فایل libbox.aar را در app/libs بگذارید و دوباره بسازید.</string>
+
+    <string name="empty_groups">گروه پروکسی وجود ندارد. گروه‌ها زمانی دیده می‌شوند که به پروفایلی با outbound از نوع selector یا urltest متصل باشید.</string>
+    <string name="empty_logs">هنوز گزارشی ثبت نشده است.</string>
+
+    <!-- notification -->
+    <string name="channel_tunnel">تونل</string>
+</resources>

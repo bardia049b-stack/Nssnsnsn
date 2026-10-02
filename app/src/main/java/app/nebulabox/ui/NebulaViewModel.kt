@@ -1,0 +1,185 @@
+package app.nebulabox.ui
+
+import android.app.Application
+import android.content.Intent
+import android.net.VpnService
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.viewModelScope
+import app.nebulabox.data.AppSettings
+import app.nebulabox.data.Profile
+import app.nebulabox.data.ProfileStore
+import app.nebulabox.data.SettingsStore
+import app.nebulabox.engine.Engines
+import app.nebulabox.engine.TunnelEngine
+import app.nebulabox.engine.TunnelState
+import app.nebulabox.engine.TunnelStatus
+import app.nebulabox.engine.OutboundGroup
+import app.nebulabox.service.Actions
+import app.nebulabox.util.ShareLinkParser
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+class NebulaViewModel(
+    private val application: Application,
+    private val profileStore: ProfileStore,
+    private val settingsStore: SettingsStore,
+) : ViewModel() {
+
+    val profiles: StateFlow<List<Profile>> = profileStore.profiles
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val settings: StateFlow<AppSettings> = settingsStore.settings
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())
+
+    val status: StateFlow<TunnelStatus> = Engines.active
+        .flatMapLatest { engine ->
+            engine?.status ?: flowOf(TunnelStatus())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), TunnelStatus())
+
+    val groups: StateFlow<List<OutboundGroup>> = Engines.active
+        .flatMapLatest { engine ->
+            engine?.groups ?: flowOf(emptyList())
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val logs: MutableSharedFlow<TunnelEngine.LogLine> = MutableSharedFlow(extraBufferCapacity = 512)
+
+    /** Profile currently being edited in the bottom sheet, if any. */
+    var draftProfile: Profile? = null
+
+    private val pendingImport = MutableStateFlow<String?>(null)
+    private val importResult = MutableSharedFlow<ImportResult>(extraBufferCapacity = 8)
+    val importResults = importResult.asSharedFlow()
+
+    private val snack = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val snacks = snack.asSharedFlow()
+
+    /** Set while waiting for the user to approve the VPN permission dialog. */
+    private val pendingConnectId = MutableStateFlow<String?>(null)
+
+    init {
+        // Mirrors the active engine's log stream into a buffer the UI can read.
+        viewModelScope.launch {
+            Engines.active
+                .flatMapLatest { engine -> engine?.logs ?: emptyFlow() }
+                .collect { logs.emit(it) }
+        }
+    }
+
+    val connected: Boolean get() = status.value.state == TunnelState.STARTED
+
+    val activeEngine: TunnelEngine? get() = Engines.active.value
+
+    // ----------------------------------------------------------- connecting
+
+    fun connect(profile: Profile) {
+        viewModelScope.launch {
+            settingsStore.update { it.copy(selectedProfileId = profile.id) }
+        }
+        val intent = VpnService.prepare(application)
+        if (intent != null) {
+            pendingConnectId.value = profile.id
+            viewModelScope.launch { vpnPermissionRequests.emit(intent) }
+        } else {
+            Actions.connect(application, profile.id)
+        }
+    }
+
+    val vpnPermissionRequests = MutableSharedFlow<Intent>(extraBufferCapacity = 2)
+
+    fun onVpnPermissionGranted() {
+        val id = pendingConnectId.value ?: return
+        pendingConnectId.value = null
+        Actions.connect(application, id)
+    }
+
+    fun onVpnPermissionDenied() {
+        pendingConnectId.value = null
+        viewModelScope.launch { snack.emit("VPN permission denied") }
+    }
+
+    fun disconnect() {
+        Actions.disconnect(application)
+    }
+
+    fun toggle(profile: Profile) {
+        if (status.value.state == TunnelState.STARTED) disconnect() else connect(profile)
+    }
+
+    // ------------------------------------------------------------- profiles
+
+    fun saveProfile(profile: Profile) {
+        viewModelScope.launch { profileStore.upsert(profile) }
+    }
+
+    fun deleteProfile(id: String) {
+        viewModelScope.launch { profileStore.delete(id) }
+    }
+
+    fun moveProfile(from: Int, to: Int) {
+        viewModelScope.launch { profileStore.move(from, to) }
+    }
+
+    fun submitImportText(text: String) {
+        pendingImport.value = text
+    }
+
+    /** Parses whatever arrived via share/intent and stores the profiles. */
+    suspend fun consumePendingImport() {
+        val text = pendingImport.value ?: return
+        pendingImport.value = null
+        val parsed = ShareLinkParser.parseMany(text)
+        if (parsed.isEmpty()) {
+            importResult.emit(ImportResult(0, text))
+            return
+        }
+        profileStore.addAll(parsed)
+        importResult.emit(ImportResult(parsed.size, text))
+    }
+
+    fun exportProfiles(callback: (String) -> Unit) {
+        viewModelScope.launch { callback(profileStore.exportJson()) }
+    }
+
+    // ------------------------------------------------------------- settings
+
+    fun updateSettings(transform: (AppSettings) -> AppSettings) {
+        viewModelScope.launch { settingsStore.update(transform) }
+    }
+
+    // ---------------------------------------------------------------- misc
+
+    fun selectOutbound(groupTag: String, itemTag: String) {
+        Engines.active.value?.selectOutbound(groupTag, itemTag)
+    }
+
+    fun urlTest(groupTag: String) {
+        Engines.active.value?.urlTest(groupTag)
+    }
+
+    fun clearLogs() {
+        Engines.active.value?.clearLogs()
+    }
+
+    data class ImportResult(val count: Int, val raw: String)
+}
+
+class NebulaViewModelFactory(
+    private val application: Application,
+    private val profileStore: ProfileStore,
+    private val settingsStore: SettingsStore,
+) : ViewModelProvider.Factory {
+    @Suppress("UNCHECKED_CAST")
+    override fun <T : ViewModel> create(modelClass: Class<T>): T =
+        NebulaViewModel(application, profileStore, settingsStore) as T
+}
