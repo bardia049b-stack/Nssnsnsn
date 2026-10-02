@@ -1,4 +1,4 @@
-name: Build sing-box & APK
+name: Build APK with sing-box Engine
 
 on:
   push:
@@ -8,8 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -24,7 +23,11 @@ jobs:
       - name: Set up Android SDK & NDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;28.0.13004108'
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
+            ndk;28.0.13004108
 
       - name: Set NDK environment variable
         run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108" >> $GITHUB_ENV
@@ -32,36 +35,96 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.25.5'
+          cache: false
+
+      # آخرین commit رسمی sing-box؛ هم برای کش، هم برای ثابت‌ماندن نسخه
+      - name: Resolve sing-box commit
+        id: sb
+        run: |
+          SHA=$(git ls-remote https://github.com/SagerNet/sing-box.git HEAD | cut -f1)
+          echo "sha=$SHA" >> $GITHUB_OUTPUT
+          echo "sing-box commit: $SHA"
+
+      - name: Restore libbox.aar cache
+        id: libbox-cache
+        uses: actions/cache@v4
+        with:
+          path: libbox-cache/libbox.aar
+          key: libbox-${{ steps.sb.outputs.sha }}
 
       - name: Clone sing-box source
-        run: git clone --depth 1 https://github.com/SagerNet/sing-box.git /tmp/sing-box
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/SagerNet/sing-box.git /tmp/sing-box
+          cd /tmp/sing-box
+          git checkout ${{ steps.sb.outputs.sha }}
+
+      - name: Install gomobile & gobind
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp/sing-box
+          go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.4
+          go install github.com/sagernet/gomobile/cmd/gobind@v0.1.4
+          echo "$HOME/go/bin" >> $GITHUB_PATH
 
       - name: Build libbox.aar
+        if: steps.libbox-cache.outputs.cache-hit != 'true'
         run: |
-          echo "$HOME/go/bin" >> $GITHUB_PATH
           export PATH="$HOME/go/bin:$PATH"
           cd /tmp/sing-box
           make lib_install
           make lib_android
+          AAR=$(find /tmp/sing-box -name libbox.aar | head -n1)
+          echo "Found: $AAR"
+          test -n "$AAR"
+          mkdir -p "$GITHUB_WORKSPACE/libbox-cache"
+          cp "$AAR" "$GITHUB_WORKSPACE/libbox-cache/libbox.aar"
 
       - name: Copy libbox.aar to project
         run: |
           mkdir -p app/libs
-          AAR=$(find /tmp/sing-box -name libbox.aar | head -n1)
-          echo "Found: $AAR"
-          test -n "$AAR"
-          cp "$AAR" app/libs/libbox.aar
+          cp libbox-cache/libbox.aar app/libs/libbox.aar
           ls -lh app/libs/libbox.aar
 
-      - name: Ensure Gradle wrapper is executable
-        run: chmod +x ./gradlew
-
+      # بیلد با لاگ تمیز در فایل؛ خطاها در Summary نمایش داده می‌شوند
       - name: Build debug APK
-        run: ./gradlew assembleDebug --no-daemon --stacktrace
+        run: |
+          chmod +x ./gradlew
+          set +e
+          ./gradlew assembleDebug --no-daemon --console=plain --stacktrace > build.log 2>&1
+          STATUS=$?
+          set -e
+          echo "Gradle exit code: $STATUS"
+          if [ $STATUS -ne 0 ]; then
+            {
+              echo "## Build errors"
+              echo '```'
+              grep -n -E "^e: |^w: .*error|What went wrong|FAILED|Execution failed|Could not |Unresolved reference|error:" build.log | head -60
+              echo '```'
+              echo "## Last 60 lines"
+              echo '```'
+              tail -n 60 build.log
+              echo '```'
+            } >> $GITHUB_STEP_SUMMARY
+            echo "=== ERRORS ==="
+            grep -n -E "^e: |What went wrong|Execution failed|Could not |Unresolved reference|error:" build.log | head -60
+            echo "=== LAST 60 LINES ==="
+            tail -n 60 build.log
+          fi
+          exit $STATUS
+
+      - name: Upload full Gradle log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: build.log
+          retention-days: 7
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
