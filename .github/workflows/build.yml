@@ -58,7 +58,7 @@ jobs:
           cd /tmp/sing-box
           git submodule update --init --recursive --depth 1
 
-      - name: Build libbox.aar
+      - name: Build libbox.aar (fat AAR)
         id: build_libbox
         timeout-minutes: 90
         run: |
@@ -66,10 +66,9 @@ jobs:
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108
           export ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/28.0.13004108
 
-          go run ./cmd/internal/build_libbox \
-            -arch android/arm64,android/arm \
-            -o /tmp/libbox.aar \
-            -tags "with_gvisor with_quic with_wireguard with_utls with_naive_outbound"
+          go run ./cmd/internal/build_libbox -platform android/arm64 -o /tmp/libbox-arm64.aar
+          go run ./cmd/internal/build_libbox -platform android/arm -o /tmp/libbox-armv7.aar
+          go run ./cmd/internal/merge_aar -o /tmp/libbox.aar /tmp/libbox-arm64.aar /tmp/libbox-armv7.aar
 
           mkdir -p ${{ github.workspace }}/app/libs
           cp /tmp/libbox.aar ${{ github.workspace }}/app/libs/libbox.aar
@@ -93,7 +92,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build APK
+      - name: Build APK with full logs
         id: build_apk
         timeout-minutes: 60
         run: |
@@ -112,9 +111,7 @@ jobs:
             APK_NAME="NebulaBox-${BUILD_TYPE}-${{ github.sha }}.apk"
             cp "$APK_PATH" "$APK_NAME"
             echo "apk_path=$APK_NAME" >> $GITHUB_OUTPUT
-            echo "::notice::APK built: $APK_NAME"
             ls -lh "$APK_NAME"
-            $ANDROID_HOME/build-tools/35.0.0/apksigner verify --print-certs "$APK_NAME" || true
           else
             echo "::error::APK not found!"
             find app/build/outputs -type f -name "*.apk" || true
