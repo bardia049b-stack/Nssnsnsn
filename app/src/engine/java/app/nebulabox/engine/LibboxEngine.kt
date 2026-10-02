@@ -4,7 +4,6 @@ import android.annotation.SuppressLint
 import android.os.Build
 import android.system.OsConstants
 import android.util.Log
-import app.nebulabox.service.TunnelVpnService
 import io.nekohasekai.libbox.BridgeOptions
 import io.nekohasekai.libbox.BridgeSession
 import io.nekohasekai.libbox.CommandClient
@@ -14,10 +13,12 @@ import io.nekohasekai.libbox.CommandServer
 import io.nekohasekai.libbox.CommandServerHandler
 import io.nekohasekai.libbox.ConnectionEvents
 import io.nekohasekai.libbox.ConnectionOwner
+import io.nekohasekai.libbox.ExchangeContext
 import io.nekohasekai.libbox.InterfaceUpdateListener
 import io.nekohasekai.libbox.Libbox
 import io.nekohasekai.libbox.LocalDNSTransport
 import io.nekohasekai.libbox.LogIterator
+import io.nekohasekai.libbox.NeighborEntryIterator
 import io.nekohasekai.libbox.NeighborUpdateListener
 import io.nekohasekai.libbox.NetworkInterfaceIterator
 import io.nekohasekai.libbox.Notification
@@ -39,7 +40,16 @@ import java.net.NetworkInterface
 
 /**
  * Drives the sing-box native core.
- * Compatible with sing-box libbox.aar v1.14.2.
+ *
+ * Two pieces of the core are used:
+ *  - [CommandServer] runs the tunnel itself and calls back into
+ *    [PlatformInterface] for platform services. [openTun] hands it the
+ *    descriptor produced by [android.net.VpnService].
+ *  - [CommandClient] is an observer on the same process, used for live status,
+ *    logs and outbound group updates.
+ *
+ * This file is only compiled when app/libs/libbox.aar is present, because it
+ * references classes from that archive.
  */
 class LibboxEngine : TunnelEngine {
 
@@ -49,8 +59,7 @@ class LibboxEngine : TunnelEngine {
     private val logFlow = MutableSharedFlow<TunnelEngine.LogLine>(extraBufferCapacity = 256)
     override val logs: Flow<TunnelEngine.LogLine> = logFlow
 
-    override val implementationName: String
-        get() = "sing-box ${runCatching { Libbox.version() }.getOrDefault("unknown")}"
+    override val implementationName: String get() = "sing-box ${runCatching { Libbox.version() }.getOrDefault("unknown")}"
 
     override val functional: Boolean get() = true
 
@@ -63,13 +72,19 @@ class LibboxEngine : TunnelEngine {
         override fun serviceStop() {
             status.value = status.value.copy(state = TunnelState.STOPPED)
         }
+
         override fun serviceReload() = Unit
+
         override fun getSystemProxyStatus(): SystemProxyStatus? = null
+
         override fun setSystemProxyEnabled(enabled: Boolean) = Unit
+
         override fun writeDebugMessage(message: String?) {
             Log.d(TAG, message ?: "")
         }
+
         override fun triggerNativeCrash() = Unit
+
         override fun connectSSHAgent(): Int = -1
     }
 
@@ -77,16 +92,22 @@ class LibboxEngine : TunnelEngine {
         override fun connected() {
             status.value = status.value.copy(state = TunnelState.STARTED)
         }
+
         override fun disconnected(message: String?) {
             status.value = status.value.copy(
                 state = TunnelState.STOPPED,
                 message = message ?: "",
             )
         }
+
         override fun clearLogs() = Unit
+
         override fun initializeClashMode(modeList: StringIterator?, currentMode: String?) = Unit
+
         override fun updateClashMode(newMode: String?) = Unit
+
         override fun setDefaultLogLevel(level: Int) = Unit
+
         override fun writeStatus(message: io.nekohasekai.libbox.StatusMessage?) {
             message ?: return
             val current = status.value
@@ -100,6 +121,7 @@ class LibboxEngine : TunnelEngine {
                 connectionsOut = message.connectionsOut,
             )
         }
+
         override fun writeGroups(groupIterator: io.nekohasekai.libbox.OutboundGroupIterator?) {
             groupIterator ?: return
             val parsed = mutableListOf<OutboundGroup>()
@@ -109,16 +131,25 @@ class LibboxEngine : TunnelEngine {
                 val itemIterator = group.items
                 while (itemIterator.hasNext()) {
                     val item = itemIterator.next()
-                    items += GroupItem(tag = item.tag, type = item.type, delayMs = item.urlTestDelay)
+                    items += GroupItem(
+                        tag = item.tag,
+                        type = item.type,
+                        delayMs = item.urlTestDelay,
+                    )
                 }
                 parsed += OutboundGroup(
-                    tag = group.tag, type = group.type, selected = group.selected,
-                    selectable = group.selectable, items = items,
+                    tag = group.tag,
+                    type = group.type,
+                    selected = group.selected,
+                    selectable = group.selectable,
+                    items = items,
                 )
             }
             groups.value = parsed
         }
+
         override fun writeOutbounds(items: OutboundGroupItemIterator?) = Unit
+
         override fun writeLogs(logIterator: LogIterator?) {
             logIterator ?: return
             while (logIterator.hasNext()) {
@@ -132,26 +163,37 @@ class LibboxEngine : TunnelEngine {
                 )
             }
         }
+
         override fun writeConnectionEvents(events: ConnectionEvents?) = Unit
     }
 
-    override fun start(profileName: String, config: String, mtu: Int, openTun: () -> Boolean) {
+    override fun start(
+        profileName: String,
+        config: String,
+        mtu: Int,
+        openTun: () -> Boolean,
+    ) {
         openTunCallback = openTun
         status.value = TunnelStatus(state = TunnelState.STARTING, profileName = profileName)
+
         val platformInterface = Platform()
         platform = platformInterface
+
         val server = CommandServer(serverHandler, platformInterface)
         server.start()
         commandServer = server
+
         server.startOrReloadService(config, OverrideOptions())
+
         status.value = status.value.copy(
             state = TunnelState.STARTED,
             startedAt = System.currentTimeMillis(),
             message = "",
         )
+
         runCatching {
             val options = CommandClientOptions().apply {
-                statusInterval = 1_000_000_000L
+                statusInterval = 1_000_000_000L // one second in nanoseconds
                 addCommand(Libbox.CommandStatus)
                 addCommand(Libbox.CommandLog)
                 addCommand(Libbox.CommandGroup)
@@ -187,11 +229,25 @@ class LibboxEngine : TunnelEngine {
         runCatching { commandClient?.clearLogs() }
     }
 
+    // ------------------------------------------------------ platform layer
+
+    /**
+     * Bridges the Go core to Android. Only the paths that a plain VPN tunnel
+     * needs are implemented; the rest report unsupported so the core can fall
+     * back instead of hanging.
+     */
     private inner class Platform : PlatformInterface {
+
         override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
+
         override fun autoDetectInterfaceControl(fd: Int) {
             Engines.tunProvider?.protectSocket(fd)
         }
+
+        /**
+         * The core asks for a tun descriptor. On Android the descriptor comes
+         * from VpnService, established by the callback supplied at start.
+         */
         override fun openTun(options: TunOptions): Int {
             val ready = openTunCallback?.invoke() ?: false
             if (!ready) error("tun interface was not established")
@@ -199,11 +255,17 @@ class LibboxEngine : TunnelEngine {
             if (fd < 0) error("no tun descriptor available")
             return fd
         }
+
         override fun useProcFS(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+
         override fun findConnectionOwner(
-            ipProtocol: Int, sourceAddress: String?, sourcePort: Int,
-            destinationAddress: String?, destinationPort: Int,
+            ipProtocol: Int,
+            sourceAddress: String?,
+            sourcePort: Int,
+            destinationAddress: String?,
+            destinationPort: Int,
         ): ConnectionOwner? = null
+
         override fun getInterfaces(): NetworkInterfaceIterator {
             val result = mutableListOf<io.nekohasekai.libbox.NetworkInterface>()
             val all = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
@@ -212,7 +274,9 @@ class LibboxEngine : TunnelEngine {
                 box.name = iface.name
                 box.index = iface.index
                 runCatching { box.mtu = iface.mtu }
-                box.addresses = StringArray(iface.interfaceAddresses.map { it.toPrefix() }.iterator())
+                box.addresses = StringArray(
+                    iface.interfaceAddresses.map { it.toPrefix() }.iterator(),
+                )
                 box.gateway = StringArray(emptyList<String>().iterator())
                 box.dnsServer = StringArray(emptyList<String>().iterator())
                 box.type = Libbox.InterfaceTypeOther
@@ -227,37 +291,70 @@ class LibboxEngine : TunnelEngine {
             }
             return InterfaceArray(result.iterator())
         }
+
         override fun underNetworkExtension(): Boolean = false
+
         override fun includeAllNetworks(): Boolean = false
+
         override fun clearDNSCache() = Unit
+
         override fun readWIFIState(): WIFIState? = null
+
         override fun localDNSTransport(): LocalDNSTransport? = null
+
         override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) = Unit
+
         override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) = Unit
+
         override fun startNeighborMonitor(listener: NeighborUpdateListener?) = Unit
+
         override fun closeNeighborMonitor(listener: NeighborUpdateListener?) = Unit
+
         override fun usePlatformShell(): Boolean = false
+
         override fun checkPlatformShell() {
             error("shell is not supported on Android")
         }
+
         override fun openShellSession(
-            user: PlatformUser?, command: String?, environ: StringIterator?,
-            term: String?, rows: Int, cols: Int,
+            user: PlatformUser?,
+            command: String?,
+            environ: StringIterator?,
+            term: String?,
+            rows: Int,
+            cols: Int,
         ): ShellSession {
             error("shell is not supported on Android")
         }
+
         override fun readSystemSSHHostKey(): String? = null
+
         override fun lookupSFTPServer(): String? = null
+
         override fun tailscaleHostname(): String? = null
+
         override fun usePlatformBridge(): Boolean = false
+
         override fun createBridge(options: BridgeOptions?): BridgeSession {
             error("bridge mode requires root")
         }
+
         override fun usePlatformAutoRedirect(): Boolean = false
+
+        @SuppressLint("NewApi")
+        override fun createAutoRedirect(
+            options: ByteArray?,
+            handler: Any?,
+        ): Any? = null
+
         override fun lookupUser(username: String?): PlatformUser? = null
+
         override fun registerMyInterface(name: String?) = Unit
+
         override fun sendNotification(notification: Notification?) = Unit
+
         override fun cancelNotification(identifier: String?, typeID: Int) = Unit
+
         private fun InterfaceAddress.toPrefix(): String = if (address is Inet6Address) {
             "${Inet6Address.getByAddress(address.address).hostAddress}/$networkPrefixLength"
         } else {
@@ -280,8 +377,5 @@ class LibboxEngine : TunnelEngine {
 
     companion object {
         private const val TAG = "LibboxEngine"
-
-        @Volatile
-        var service: TunnelVpnService? = null
     }
 }
