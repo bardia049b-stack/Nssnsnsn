@@ -1,6 +1,8 @@
 name: Build and Release APK
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       build_type:
@@ -72,7 +74,7 @@ jobs:
         id: build_apk
         run: |
           cd ${{ github.workspace }}
-          BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'debug' }}"
 
           if [ "$BUILD_TYPE" = "release" ]; then
             ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
@@ -97,7 +99,7 @@ jobs:
         if: steps.build_apk.outputs.apk_path != ''
         uses: softprops/action-gh-release@v2
         with:
-          name: NebulaBox v1.0.0 (${{ github.sha }})
+          name: NebulaBox ${{ github.sha }}
           tag_name: v1.0.0-${{ github.sha }}
           body: |
             **NebulaBox - Android VPN Client**
@@ -105,8 +107,6 @@ jobs:
             - Built with sing-box v1.14.2
             - ARM64 support
             - Full protocol support (VLESS, VMess, Trojan, Shadowsocks, WireGuard, etc.)
-
-            **Download:** See assets below
           files: |
             ${{ steps.build_apk.outputs.apk_path }}
           fail_on_unmatched_files: false
