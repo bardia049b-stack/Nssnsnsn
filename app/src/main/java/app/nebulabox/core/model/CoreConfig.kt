@@ -418,8 +418,8 @@ data class CoreConfig(
 
         data class RulesBean(
             var type: String = "field",
-            var ip: ArrayList<String>? = null,
-            var domain: ArrayList<String>? = null,
+            var ip: List<String>? = null,
+            var domain: List<String>? = null,
             var outboundTag: String = "",
             var balancerTag: String? = null,
             var port: String? = null,

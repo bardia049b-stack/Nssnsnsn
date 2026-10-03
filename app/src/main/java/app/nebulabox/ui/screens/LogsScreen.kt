@@ -1,8 +1,8 @@
 package app.nebulabox.ui.screens
 
-import android.content.Intent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,130 +26,148 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BugReport
 import androidx.compose.material.icons.outlined.ContentCopy
-import androidx.compose.material.icons.outlined.DeleteOutline
-import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.DeleteSweep
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Badge
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.nebulabox.R
 import app.nebulabox.ui.NebulaViewModel
 import app.nebulabox.util.AppLogger
 import app.nebulabox.util.ClipboardHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun LogsScreen(viewModel: NebulaViewModel) {
-    val entries by AppLogger.entries.collectAsStateWithLifecycle()
-    val crashes by AppLogger.crashes.collectAsStateWithLifecycle()
-    val activeConfigJson by AppLogger.lastActiveConfigJson.collectAsStateWithLifecycle()
-    val engineLogs by viewModel.logs.collectAsStateWithLifecycle()
-
     val context = LocalContext.current
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
-    var filterLevel by rememberSaveable { mutableStateOf<AppLogger.Level?>(null) }
+    val appLogs by AppLogger.logs.collectAsState()
+    val crashes by AppLogger.crashes.collectAsState()
+    val lastConfig by AppLogger.lastGeneratedConfig.collectAsState()
 
-    LaunchedEffect(engineLogs.size) {
-        engineLogs.lastOrNull()?.let { line ->
-            if (entries.lastOrNull()?.message != line) {
-                AppLogger.i("CoreEngine", line)
-            }
-        }
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var levelFilter by rememberSaveable { mutableStateOf("ALL") }
+
+    LaunchedEffect(Unit) {
+        AppLogger.refreshNativeCrashes()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp),
-    ) {
+    Column(Modifier.fillMaxSize()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
+            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            IconButton(
-                onClick = {
-                    val report = AppLogger.exportDiagnosticReport(context)
-                    ClipboardHelper.copyText(context, "JavidTun Diagnostics", report)
-                },
-            ) {
-                Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy Full Report")
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Diagnostics",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "${appLogs.size} logs · ${crashes.size} crashes",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            IconButton(
-                onClick = {
-                    val report = AppLogger.exportDiagnosticReport(context)
-                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_SUBJECT, "JavidTun Diagnostic Report")
-                        putExtra(Intent.EXTRA_TEXT, report)
-                    }
-                    context.startActivity(Intent.createChooser(sendIntent, "Share Diagnostic Report"))
-                },
-            ) {
-                Icon(Icons.Outlined.Share, contentDescription = "Share Report")
-            }
-            IconButton(
-                onClick = {
-                    if (selectedTab == 1) {
-                        AppLogger.clearCrashes()
-                    } else {
-                        AppLogger.clearLogs()
-                        viewModel.clearLogs()
-                    }
-                },
-            ) {
-                Icon(Icons.Outlined.DeleteOutline, contentDescription = "Clear")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(
+                    onClick = {
+                        val textToCopy = when (selectedTab) {
+                            0 -> AppLogger.exportLogsText()
+                            1 -> AppLogger.exportCrashesText()
+                            2 -> lastConfig.ifBlank { "(No config generated yet)" }
+                            else -> AppLogger.readSystemLogcat()
+                        }
+                        ClipboardHelper.copyText(context, "JavidTun Diagnostics", textToCopy)
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.ContentCopy,
+                        contentDescription = "Copy",
+                    )
+                }
+                IconButton(
+                    onClick = {
+                        when (selectedTab) {
+                            0 -> {
+                                AppLogger.clearLogs()
+                                viewModel.clearLogs()
+                            }
+                            1 -> AppLogger.clearCrashes()
+                            else -> AppLogger.refreshNativeCrashes()
+                        }
+                    },
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.DeleteSweep,
+                        contentDescription = stringResource(R.string.action_clear_logs),
+                    )
+                }
             }
         }
 
         TabRow(
             selectedTabIndex = selectedTab,
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
-            modifier = Modifier.fillMaxWidth(),
+            containerColor = MaterialTheme.colorScheme.surface,
+            divider = {
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                )
+            },
         ) {
             Tab(
                 selected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
-                text = { Text("Live Logs (${entries.size})", maxLines = 1) },
+                text = { Text("Logs (${appLogs.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
             Tab(
                 selected = selectedTab == 1,
                 onClick = { selectedTab = 1 },
                 text = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Crashes", maxLines = 1)
                         if (crashes.isNotEmpty()) {
+                            Spacer(Modifier.width(6.dp))
                             Badge(containerColor = MaterialTheme.colorScheme.error) {
-                                Text("${crashes.size}")
+                                Text(crashes.size.toString())
                             }
                         }
                     }
@@ -160,30 +178,34 @@ fun LogsScreen(viewModel: NebulaViewModel) {
                 onClick = { selectedTab = 2 },
                 text = { Text("Config", maxLines = 1) },
             )
+            Tab(
+                selected = selectedTab == 3,
+                onClick = { selectedTab = 3 },
+                text = { Text("Logcat", maxLines = 1) },
+            )
         }
-
-        Spacer(Modifier.height(10.dp))
 
         when (selectedTab) {
             0 -> LiveLogsTab(
-                entries = entries,
-                filterLevel = filterLevel,
-                onFilterChange = { filterLevel = it },
-                onCopyLine = { line ->
-                    ClipboardHelper.copyText(context, "Log Entry", line)
+                entries = appLogs,
+                levelFilter = levelFilter,
+                onLevelFilterChange = { levelFilter = it },
+                onCopyAll = {
+                    ClipboardHelper.copyText(context, "JavidTun Logs", AppLogger.exportLogsText())
                 },
             )
             1 -> CrashesTab(
                 crashes = crashes,
-                onCopyCrash = { crash ->
-                    ClipboardHelper.copyText(context, "Crash Report", crash)
-                },
+                onRefresh = { AppLogger.refreshNativeCrashes() },
+                onClear = { AppLogger.clearCrashes() },
+                onCopy = { text -> ClipboardHelper.copyText(context, "JavidTun Crash Report", text) },
             )
-            2 -> ActiveConfigTab(
-                configJson = activeConfigJson,
-                onCopy = {
-                    ClipboardHelper.copyText(context, "Active Config JSON", activeConfigJson)
-                },
+            2 -> ConfigTab(
+                configJson = lastConfig,
+                onCopy = { ClipboardHelper.copyText(context, "JavidTun Config", lastConfig) },
+            )
+            3 -> SystemLogcatTab(
+                onCopy = { text -> ClipboardHelper.copyText(context, "JavidTun Logcat", text) },
             )
         }
     }
@@ -192,20 +214,25 @@ fun LogsScreen(viewModel: NebulaViewModel) {
 @Composable
 private fun LiveLogsTab(
     entries: List<AppLogger.LogEntry>,
-    filterLevel: AppLogger.Level?,
-    onFilterChange: (AppLogger.Level?) -> Unit,
-    onCopyLine: (String) -> Unit,
+    levelFilter: String,
+    onLevelFilterChange: (String) -> Unit,
+    onCopyAll: () -> Unit,
 ) {
-    val filtered = if (filterLevel == null) {
-        entries
-    } else {
-        entries.filter { it.level.priority >= filterLevel.priority }
+    val listState = rememberLazyListState()
+    val timeFormat = remember { SimpleDateFormat("HH:mm:ss.SSS", Locale.US) }
+
+    val filtered = remember(entries, levelFilter) {
+        when (levelFilter) {
+            "ERROR" -> entries.filter { it.level == AppLogger.Level.ERROR }
+            "WARN" -> entries.filter { it.level == AppLogger.Level.WARN || it.level == AppLogger.Level.ERROR }
+            "INFO" -> entries.filter { it.level != AppLogger.Level.DEBUG }
+            else -> entries
+        }
     }
 
-    val listState = rememberLazyListState()
     LaunchedEffect(filtered.size) {
         if (filtered.isNotEmpty()) {
-            listState.animateScrollToItem(filtered.lastIndex)
+            listState.animateScrollToItem(filtered.size - 1)
         }
     }
 
@@ -213,148 +240,73 @@ private fun LiveLogsTab(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            FilterChip(
-                selected = filterLevel == null,
-                onClick = { onFilterChange(null) },
-                label = { Text("All") },
-            )
-            FilterChip(
-                selected = filterLevel == AppLogger.Level.INFO,
-                onClick = { onFilterChange(AppLogger.Level.INFO) },
-                label = { Text("Info+") },
-            )
-            FilterChip(
-                selected = filterLevel == AppLogger.Level.WARN,
-                onClick = { onFilterChange(AppLogger.Level.WARN) },
-                label = { Text("Warn+") },
-            )
-            FilterChip(
-                selected = filterLevel == AppLogger.Level.ERROR,
-                onClick = { onFilterChange(AppLogger.Level.ERROR) },
-                label = { Text("Errors") },
-            )
+            listOf("ALL", "INFO", "WARN", "ERROR").forEach { lvl ->
+                FilterChip(
+                    selected = levelFilter == lvl,
+                    onClick = { onLevelFilterChange(lvl) },
+                    label = { Text(lvl, style = MaterialTheme.typography.labelMedium) },
+                    shape = RoundedCornerShape(10.dp),
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        selectedLabelColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            OutlinedButton(
+                onClick = onCopyAll,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Copy All", maxLines = 1, softWrap = false)
+            }
         }
 
-        Spacer(Modifier.height(8.dp))
-
-        Surface(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 16.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
-        ) {
-            if (filtered.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        text = "No log events recorded yet.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            } else {
-                SelectionContainer {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        items(filtered, key = { it.id }) { entry ->
-                            LogEntryItem(entry = entry, onCopy = { onCopyLine(entry.format()) })
+        if (filtered.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    text = stringResource(R.string.empty_logs),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            SelectionContainer {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surface),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(filtered, key = { it.id }) { entry ->
+                        val baseText = "${timeFormat.format(Date(entry.timestamp))} ${entry.level.label}/${entry.tag}: ${entry.message}"
+                        val fullText = if (!entry.stacktrace.isNullOrBlank()) {
+                            "$baseText\n${entry.stacktrace}"
+                        } else {
+                            baseText
                         }
+                        Text(
+                            text = fullText,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.5.sp,
+                                lineHeight = 15.sp,
+                            ),
+                            color = colorForAppLevel(entry.level),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun LogEntryItem(
-    entry: AppLogger.LogEntry,
-    onCopy: () -> Unit,
-) {
-    val badgeColor = when (entry.level) {
-        AppLogger.Level.DEBUG -> Color(0xFF64748B)
-        AppLogger.Level.INFO -> Color(0xFF0EA5E9)
-        AppLogger.Level.WARN -> Color(0xFFF59E0B)
-        AppLogger.Level.ERROR -> Color(0xFFEF4444)
-        AppLogger.Level.CRASH -> Color(0xFFDC2626)
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-                shape = RoundedCornerShape(10.dp),
-            )
-            .padding(horizontal = 10.dp, vertical = 6.dp),
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Surface(
-                color = badgeColor.copy(alpha = 0.16f),
-                shape = RoundedCornerShape(5.dp),
-            ) {
-                Text(
-                    text = entry.level.label,
-                    color = badgeColor,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                )
-            }
-            Text(
-                text = entry.timestamp,
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = entry.tag,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(
-                onClick = onCopy,
-                modifier = Modifier.size(20.dp),
-            ) {
-                Icon(
-                    Icons.Outlined.ContentCopy,
-                    contentDescription = "Copy",
-                    modifier = Modifier.size(13.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        Text(
-            text = entry.message,
-            fontFamily = FontFamily.Monospace,
-            fontSize = 11.5.sp,
-            lineHeight = 16.sp,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        if (!entry.stackTrace.isNullOrBlank()) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = entry.stackTrace,
-                fontFamily = FontFamily.Monospace,
-                fontSize = 10.5.sp,
-                lineHeight = 14.sp,
-                color = MaterialTheme.colorScheme.error,
-            )
         }
     }
 }
@@ -362,96 +314,145 @@ private fun LogEntryItem(
 @Composable
 private fun CrashesTab(
     crashes: List<AppLogger.CrashReport>,
-    onCopyCrash: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onClear: () -> Unit,
+    onCopy: (String) -> Unit,
 ) {
-    if (crashes.isEmpty()) {
-        Surface(
+    val timeFormat = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US) }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 16.dp),
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Outlined.BugReport,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(40.dp),
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = "No crashes recorded",
-                        style = MaterialTheme.typography.titleMedium,
-                    )
+            OutlinedButton(
+                onClick = onRefresh,
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Scan Native", maxLines = 1, softWrap = false)
+            }
+            if (crashes.isNotEmpty()) {
+                OutlinedButton(
+                    onClick = { onCopy(AppLogger.exportCrashesText()) },
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Copy All", maxLines = 1, softWrap = false)
+                }
+                OutlinedButton(
+                    onClick = onClear,
+                    shape = RoundedCornerShape(10.dp),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Outlined.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Clear", maxLines = 1, softWrap = false)
                 }
             }
         }
-    } else {
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            items(crashes, key = { it.id }) { crash ->
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.35f),
-                    ),
-                ) {
-                    Column(Modifier.padding(14.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Column(Modifier.weight(1f)) {
-                                Text(
-                                    text = crash.summary,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.error,
-                                )
-                                Text(
-                                    text = "${crash.timestamp} • thread: ${crash.threadName}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            FilledTonalButton(
-                                onClick = {
-                                    onCopyCrash(
-                                        buildString {
-                                            appendLine("Time: ${crash.timestamp}")
-                                            appendLine("Thread: ${crash.threadName}")
-                                            appendLine("Device: ${crash.deviceInfo}")
-                                            appendLine("Summary: ${crash.summary}")
-                                            appendLine()
-                                            appendLine(crash.stackTrace)
-                                        },
-                                    )
-                                },
+
+        if (crashes.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Outlined.BugReport,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(32.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "No crash reports recorded.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(crashes, key = { it.id }) { crash ->
+                    var expanded by rememberSaveable(crash.id) { mutableStateOf(true) }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        border = BorderStroke(
+                            0.8.dp,
+                            MaterialTheme.colorScheme.error.copy(alpha = 0.35f),
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { expanded = !expanded },
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text("Copy")
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        text = crash.source,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier
+                                            .background(
+                                                MaterialTheme.colorScheme.errorContainer,
+                                                RoundedCornerShape(6.dp),
+                                            )
+                                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        text = timeFormat.format(Date(crash.timestamp)),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                IconButton(onClick = { onCopy(crash.details) }) {
+                                    Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy crash")
+                                }
                             }
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        SelectionContainer {
+                            Spacer(Modifier.height(6.dp))
                             Text(
-                                text = crash.stackTrace,
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.5.sp,
-                                lineHeight = 14.sp,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(rememberScrollState()),
+                                text = crash.summary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.error,
                             )
+                            if (expanded) {
+                                Spacer(Modifier.height(8.dp))
+                                SelectionContainer {
+                                    Text(
+                                        text = crash.details,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                            fontSize = 11.sp,
+                                            lineHeight = 14.sp,
+                                        ),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(
+                                                MaterialTheme.colorScheme.surface,
+                                                RoundedCornerShape(10.dp),
+                                            )
+                                            .padding(10.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -461,83 +462,150 @@ private fun CrashesTab(
 }
 
 @Composable
-private fun ActiveConfigTab(
+private fun ConfigTab(
     configJson: String,
     onCopy: () -> Unit,
 ) {
-    Surface(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(bottom = 16.dp),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surface,
-        border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
-    ) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Active Core JSON Configuration",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedButton(
+                onClick = onCopy,
+                enabled = configJson.isNotBlank(),
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Copy JSON", maxLines = 1, softWrap = false)
+            }
+        }
+
         if (configJson.isBlank()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "Connect to a server to inspect the generated JSON configuration.",
+                    text = "Connect to a server profile to generate and inspect the active JSON configuration.",
+                    style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(24.dp),
                 )
             }
         } else {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(14.dp),
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+            SelectionContainer {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .background(
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                            RoundedCornerShape(12.dp),
+                        )
+                        .padding(14.dp),
                 ) {
                     Text(
-                        text = "Generated Core Config JSON",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(end = 12.dp),
-                    )
-                    FilledTonalButton(
-                        onClick = onCopy,
-                        shape = RoundedCornerShape(10.dp),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        ),
-                    ) {
-                        Icon(
-                            Icons.Outlined.ContentCopy,
-                            contentDescription = "Copy JSON",
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            text = "Copy JSON",
-                            style = MaterialTheme.typography.labelMedium,
-                            maxLines = 1,
-                        )
-                    }
-                }
-                Spacer(Modifier.height(8.dp))
-                SelectionContainer {
-                    Text(
                         text = configJson,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 11.sp,
-                        lineHeight = 15.sp,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .horizontalScroll(rememberScrollState()),
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.5.sp,
+                            lineHeight = 15.sp,
+                        ),
                     )
                 }
             }
         }
     }
+}
+
+@Composable
+private fun SystemLogcatTab(
+    onCopy: (String) -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var logcatText by remember { mutableStateOf("Loading system logcat...") }
+
+    fun reload() {
+        scope.launch {
+            logcatText = withContext(Dispatchers.IO) {
+                AppLogger.deviceInfoHeader() + "\n" + AppLogger.readSystemLogcat(400)
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        reload()
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = { reload() },
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Refresh", maxLines = 1, softWrap = false)
+            }
+            OutlinedButton(
+                onClick = { onCopy(logcatText) },
+                shape = RoundedCornerShape(10.dp),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
+            ) {
+                Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Copy Logcat", maxLines = 1, softWrap = false)
+            }
+        }
+
+        SelectionContainer {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .background(
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                        RoundedCornerShape(12.dp),
+                    )
+                    .padding(12.dp),
+            ) {
+                Text(
+                    text = logcatText,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 11.sp,
+                        lineHeight = 14.sp,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun colorForAppLevel(level: AppLogger.Level): Color = when (level) {
+    AppLogger.Level.ERROR -> MaterialTheme.colorScheme.error
+    AppLogger.Level.WARN -> MaterialTheme.colorScheme.tertiary
+    AppLogger.Level.DEBUG -> MaterialTheme.colorScheme.onSurfaceVariant
+    AppLogger.Level.INFO -> MaterialTheme.colorScheme.onSurface
 }

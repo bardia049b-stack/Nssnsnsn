@@ -14,6 +14,7 @@ import app.nebulabox.util.ShareLinkParser
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonPrimitive
+import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 
@@ -52,7 +53,7 @@ internal object HostResolver {
         dns.hosts = newHosts
     }
 
-    private fun isPureIpAddress(value: String): Boolean {
+    fun isPureIpAddress(value: String): Boolean {
         val v = value.trim().removeSurrounding("[", "]")
         if (v.isEmpty()) return false
         val ipv4Regex = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")

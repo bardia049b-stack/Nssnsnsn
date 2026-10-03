@@ -8,7 +8,8 @@ enum class TransportType(val type: String) {
     XHTTP("xhttp"),
     HTTP("http"),
     H2("h2"),
-    GRPC("grpc");
+    GRPC("grpc"),
+    HYSTERIA("hysteria");
 
     companion object {
         fun fromString(type: String?) = entries.find { it.type == type } ?: TCP

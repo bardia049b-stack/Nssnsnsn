@@ -358,8 +358,8 @@ internal object OutboundConfigBuilder {
 
         val sniExt = when {
             p.tls.serverName.isNotBlank() -> p.tls.serverName
-            !sni.isNullOrBlank() && !isPureIpAddress(sni) -> sni
-            p.server.isNotBlank() && !isPureIpAddress(p.server) -> p.server
+            !sni.isNullOrBlank() && !HostResolver.isPureIpAddress(sni) -> sni
+            p.server.isNotBlank() && !HostResolver.isPureIpAddress(p.server) -> p.server
             else -> sni
         }
 

@@ -305,7 +305,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 selectedValue = s.language,
                 onSelected = { code ->
                     viewModel.updateSettings { it.copy(language = code) }
-                    LocaleManager.apply(code)
+                    LocaleManager.storeLanguage(context, code)
                 },
             )
             SettingsListRow(
