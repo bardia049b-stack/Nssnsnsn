@@ -1,8 +1,6 @@
 package app.nebulabox.ui.screens
 
-import android.app.Activity
 import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -13,417 +11,697 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.nebulabox.BuildConfig
 import app.nebulabox.R
-import app.nebulabox.engine.Engines
 import app.nebulabox.locale.LocaleManager
+import app.nebulabox.ui.AppDivider
 import app.nebulabox.ui.NebulaViewModel
 
+/**
+ * Settings screen modeled directly on `v2rayNG 2.3.10` (`SettingsActivity.kt` & `SettingsItem.kt`):
+ *  - Clean flat list with `CollapsiblePreferenceGroupHeader` in orange (`MaterialTheme.colorScheme.secondary`)
+ *  - `SettingsSwitchItem`, `SettingsListItem`, and `SettingsEditItem`
+ */
 @Composable
 fun SettingsScreen(viewModel: NebulaViewModel) {
-    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val s by viewModel.settings.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    var showAppPicker by remember { mutableStateOf(false) }
+    var showAppPicker by rememberSaveable { mutableStateOf(false) }
+
+    var vpnExpanded by rememberSaveable { mutableStateOf(true) }
+    var routingExpanded by rememberSaveable { mutableStateOf(true) }
+    var dnsExpanded by rememberSaveable { mutableStateOf(true) }
+    var fragmentExpanded by rememberSaveable { mutableStateOf(true) }
+    var muxExpanded by rememberSaveable { mutableStateOf(false) }
+    var uiExpanded by rememberSaveable { mutableStateOf(true) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .verticalScroll(rememberScrollState()),
     ) {
-        Text(
-            text = stringResource(R.string.tab_settings),
-            style = MaterialTheme.typography.headlineMedium,
+        // 1. VPN Settings
+        CollapsiblePreferenceGroupHeader(
+            title = "VPN Settings",
+            expanded = vpnExpanded,
+            onExpandedChange = { vpnExpanded = it },
         )
-
-        SectionCard(stringResource(R.string.section_appearance)) {
-            Picker(
-                label = stringResource(R.string.setting_language),
-                options = listOf(
-                    LocaleManager.SYSTEM to stringResource(R.string.lang_system),
-                    LocaleManager.ENGLISH to stringResource(R.string.lang_english),
-                    LocaleManager.PERSIAN to stringResource(R.string.lang_persian),
-                ),
-                selectedKey = LocaleManager.storedLanguage(),
-                onSelect = { code ->
-                    LocaleManager.storeLanguage(context, code)
-                    viewModel.updateSettings { it.copy(language = code) }
-                    (context as? Activity)?.recreate()
+        if (vpnExpanded) {
+            SettingsSwitchItem(
+                title = "Use hev-socks5-tunnel (v2rayNG mode)",
+                summary = if (s.useHevTun) "Enabled (hev-socks5-tunnel + Xray SOCKS)" else "Disabled (Xray Native TUN)",
+                checked = s.useHevTun,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(useHevTun = v) } },
+            )
+            SettingsSwitchItem(
+                title = "Per-app proxy",
+                summary = if (s.perAppEnabled) "${s.perAppPackages.size} apps selected (${s.perAppMode})" else "Proxy all apps",
+                checked = s.perAppEnabled,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(perAppEnabled = v) } },
+            )
+            if (s.perAppEnabled) {
+                SettingsListItem(
+                    title = "Per-app proxy mode",
+                    options = listOf("exclude" to "Bypass selected apps", "include" to "Only proxy selected apps"),
+                    selectedValue = s.perAppMode,
+                    onSelected = { v -> viewModel.updateSettings { it.copy(perAppMode = v) } },
+                )
+                SettingsMenuItem(
+                    title = "Select apps for per-app proxy",
+                    subtitle = "${s.perAppPackages.size} apps configured",
+                    onClick = { showAppPicker = true },
+                )
+            }
+            SettingsSwitchItem(
+                title = "Bypass LAN",
+                summary = "Route private local network addresses directly",
+                checked = s.bypassLan,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(bypassLan = v) } },
+            )
+            SettingsEditItem(
+                title = "VPN MTU",
+                value = s.mtu.toString(),
+                onValueChanged = { text ->
+                    text.toIntOrNull()?.let { mtu ->
+                        if (mtu in 1280..1500) viewModel.updateSettings { it.copy(mtu = mtu) }
+                    }
                 },
             )
-            Picker(
-                label = stringResource(R.string.setting_theme),
+            SettingsEditItem(
+                title = "SOCKS5 port",
+                value = s.socksPort.toString(),
+                onValueChanged = { text ->
+                    text.toIntOrNull()?.let { port ->
+                        if (port in 1024..65535) viewModel.updateSettings { it.copy(socksPort = port) }
+                    }
+                },
+            )
+            SettingsSwitchItem(
+                title = "Enable IPv6",
+                summary = "Enable IPv6 on TUN interface",
+                checked = s.ipv6,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(ipv6 = v) } },
+            )
+            SettingsSwitchItem(
+                title = "Allow connections from LAN",
+                summary = "Bind SOCKS5 port on 0.0.0.0",
+                checked = s.allowLan,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(allowLan = v) } },
+            )
+            SettingsSwitchItem(
+                title = "Enable speed display in notification",
+                summary = "Show live uplink/downlink speed in status bar",
+                checked = s.showSpeedInNotification,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(showSpeedInNotification = v) } },
+            )
+        }
+        AppDivider()
+
+        // 2. Routing & Sniffing Settings
+        CollapsiblePreferenceGroupHeader(
+            title = "Routing & Sniffing",
+            expanded = routingExpanded,
+            onExpandedChange = { routingExpanded = it },
+        )
+        if (routingExpanded) {
+            SettingsListItem(
+                title = "Routing preset",
+                options = listOf(
+                    "global" to "Global (Proxy all except LAN)",
+                    "white_iran" to "Bypass LAN & Iran (domain:ir / geosite:category-ir / geoip:ir)",
+                    "rule" to "Bypass LAN & Mainland China",
+                    "direct" to "Direct All",
+                ),
+                selectedValue = s.routeMode,
+                onSelected = { v -> viewModel.updateSettings { it.copy(routeMode = v) } },
+            )
+            SettingsListItem(
+                title = "Domain strategy",
+                options = listOf(
+                    "AsIs" to "AsIs (v2rayNG default)",
+                    "IPIfNonMatch" to "IPIfNonMatch",
+                    "IPOnDemand" to "IPOnDemand",
+                ),
+                selectedValue = s.domainStrategy,
+                onSelected = { v -> viewModel.updateSettings { it.copy(domainStrategy = v) } },
+            )
+            SettingsListItem(
+                title = "Server domain resolve method",
+                options = listOf(
+                    "happy_eyeballs" to "Happy Eyeballs (Pre-resolve + UseIP)",
+                    "asis" to "AsIs (Do not pre-resolve)",
+                ),
+                selectedValue = s.outboundDomainResolve,
+                onSelected = { v -> viewModel.updateSettings { it.copy(outboundDomainResolve = v) } },
+            )
+            SettingsSwitchItem(
+                title = "Enable traffic sniffing",
+                summary = "Override destination from TLS SNI / HTTP Host (http, tls, quic)",
+                checked = s.sniffing,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(sniffing = v) } },
+            )
+            SettingsSwitchItem(
+                title = "Route only (Sniffing)",
+                summary = "Use sniffed domain only for routing rules",
+                checked = s.routeOnly,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(routeOnly = v) } },
+            )
+            SettingsSwitchItem(
+                title = "Block ads (geosite:category-ads-all)",
+                summary = "Block ad domains via Xray blackhole outbound",
+                checked = s.blockAds,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(blockAds = v) } },
+            )
+        }
+        AppDivider()
+
+        // 3. DNS Settings
+        CollapsiblePreferenceGroupHeader(
+            title = "DNS Settings",
+            expanded = dnsExpanded,
+            onExpandedChange = { dnsExpanded = it },
+        )
+        if (dnsExpanded) {
+            SettingsEditItem(
+                title = "Remote DNS",
+                value = s.remoteDns,
+                onValueChanged = { v -> viewModel.updateSettings { it.copy(remoteDns = v.ifBlank { "https://cloudflare-dns.com/dns-query" }) } },
+            )
+            SettingsEditItem(
+                title = "Domestic DNS",
+                value = s.directDns,
+                onValueChanged = { v -> viewModel.updateSettings { it.copy(directDns = v.ifBlank { "8.8.8.8" }) } },
+            )
+            SettingsEditItem(
+                title = "VPN DNS",
+                value = s.vpnDns,
+                onValueChanged = { v -> viewModel.updateSettings { it.copy(vpnDns = v.ifBlank { "1.1.1.1" }) } },
+            )
+            SettingsSwitchItem(
+                title = "Enable FakeDNS",
+                summary = "Return synthetic IPs (198.18.0.0/15) for faster DNS response",
+                checked = s.fakeDns,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(fakeDns = v) } },
+            )
+            SettingsEditItem(
+                title = "Real ping test URL",
+                value = s.delayTestUrl,
+                onValueChanged = { v -> viewModel.updateSettings { it.copy(delayTestUrl = v.ifBlank { "https://www.gstatic.com/generate_204" }) } },
+            )
+        }
+        AppDivider()
+
+        // 4. Fragment Settings (Anti-DPI)
+        CollapsiblePreferenceGroupHeader(
+            title = "Fragment Settings (Anti-DPI)",
+            expanded = fragmentExpanded,
+            onExpandedChange = { fragmentExpanded = it },
+        )
+        if (fragmentExpanded) {
+            SettingsSwitchItem(
+                title = "Enable TLS Fragment",
+                summary = "Split TLS ClientHello packets to bypass ISP SNI/DPI filtering",
+                checked = s.fragmentEnabled,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(fragmentEnabled = v) } },
+            )
+            if (s.fragmentEnabled) {
+                SettingsListItem(
+                    title = "Fragment packets",
+                    options = listOf(
+                        "tlshello" to "tlshello (TLS ClientHello)",
+                        "1-3" to "1-3 (TCP packets 1 to 3)",
+                        "1-5" to "1-5 (TCP packets 1 to 5)",
+                    ),
+                    selectedValue = s.fragmentPackets,
+                    onSelected = { v -> viewModel.updateSettings { it.copy(fragmentPackets = v) } },
+                )
+                SettingsEditItem(
+                    title = "Fragment length",
+                    value = s.fragmentLength,
+                    onValueChanged = { v -> viewModel.updateSettings { it.copy(fragmentLength = v.ifBlank { "50-100" }) } },
+                )
+                SettingsEditItem(
+                    title = "Fragment interval (ms)",
+                    value = s.fragmentInterval,
+                    onValueChanged = { v -> viewModel.updateSettings { it.copy(fragmentInterval = v.ifBlank { "10-20" }) } },
+                )
+            }
+        }
+        AppDivider()
+
+        // 5. Mux Settings
+        CollapsiblePreferenceGroupHeader(
+            title = "Mux Settings",
+            expanded = muxExpanded,
+            onExpandedChange = { muxExpanded = it },
+        )
+        if (muxExpanded) {
+            SettingsSwitchItem(
+                title = "Enable Mux",
+                summary = "Multiplex TCP/XUDP streams over a single connection",
+                checked = s.tcpMux,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(tcpMux = v) } },
+            )
+            if (s.tcpMux) {
+                SettingsEditItem(
+                    title = "Mux concurrency",
+                    value = s.muxConcurrency.toString(),
+                    onValueChanged = { text ->
+                        text.toIntOrNull()?.let { n ->
+                            if (n in 1..64) viewModel.updateSettings { it.copy(muxConcurrency = n) }
+                        }
+                    },
+                )
+            }
+        }
+        AppDivider()
+
+        // 6. UI & Core Settings
+        CollapsiblePreferenceGroupHeader(
+            title = "UI & Core Settings",
+            expanded = uiExpanded,
+            onExpandedChange = { uiExpanded = it },
+        )
+        if (uiExpanded) {
+            SettingsListItem(
+                title = stringResource(R.string.settings_language),
+                options = listOf(
+                    "system" to stringResource(R.string.lang_system),
+                    "en" to stringResource(R.string.lang_english),
+                    "fa" to stringResource(R.string.lang_persian),
+                ),
+                selectedValue = s.language,
+                onSelected = { tag ->
+                    viewModel.updateSettings { it.copy(language = tag) }
+                    LocaleManager.setLocale(context, tag)
+                },
+            )
+            SettingsListItem(
+                title = stringResource(R.string.settings_theme),
                 options = listOf(
                     "system" to stringResource(R.string.theme_system),
                     "light" to stringResource(R.string.theme_light),
                     "dark" to stringResource(R.string.theme_dark),
                 ),
-                selectedKey = settings.theme,
-                onSelect = { value -> viewModel.updateSettings { it.copy(theme = value) } },
+                selectedValue = s.theme,
+                onSelected = { v -> viewModel.updateSettings { it.copy(theme = v) } },
             )
-            ToggleRow(
-                label = stringResource(R.string.setting_dynamic_color),
-                checked = settings.dynamicColor,
-                onChange = { on -> viewModel.updateSettings { it.copy(dynamicColor = on) } },
-            )
-        }
-
-        SectionCard("VPN & TUN Engine (v2rayNG)") {
-            ToggleRow(
-                label = "Use hev-socks5-tunnel (v2rayNG Default)",
-                checked = settings.useHevTun,
-                onChange = { on -> viewModel.updateSettings { it.copy(useHevTun = on) } },
-            )
-            TextRow(
-                label = "VPN MTU (1280 - 1500)",
-                value = settings.mtu.toString(),
-                onChange = { v ->
-                    val parsed = v.filter(Char::isDigit).toIntOrNull() ?: 1500
-                    viewModel.updateSettings { it.copy(mtu = parsed.coerceIn(1280, 1500)) }
-                },
-            )
-            TextRow(
-                label = "Local SOCKS5 / HTTP Proxy Port",
-                value = settings.socksPort.toString(),
-                onChange = { v ->
-                    val parsed = v.filter(Char::isDigit).toIntOrNull() ?: 10808
-                    viewModel.updateSettings { it.copy(socksPort = parsed.coerceIn(1024, 65535)) }
-                },
-            )
-            ToggleRow(
-                label = "Allow Connections from LAN (0.0.0.0)",
-                checked = settings.allowLan,
-                onChange = { on -> viewModel.updateSettings { it.copy(allowLan = on) } },
-            )
-            ToggleRow(
-                label = "Display Speed in Notification",
-                checked = settings.showSpeedInNotification,
-                onChange = { on -> viewModel.updateSettings { it.copy(showSpeedInNotification = on) } },
-            )
-        }
-
-        SectionCard("Xray TLS Fragment & Anti-DPI") {
-            ToggleRow(
-                label = "Enable TLS Fragment & UDP Noise (finalmask)",
-                checked = settings.fragmentEnabled,
-                onChange = { on -> viewModel.updateSettings { it.copy(fragmentEnabled = on) } },
-            )
-            if (settings.fragmentEnabled) {
-                Picker(
-                    label = "Fragment Packets",
-                    options = listOf(
-                        "tlshello" to "tlshello (TLS ClientHello)",
-                        "1-3" to "1-3 (First 1-3 TCP packets)",
-                        "1-5" to "1-5 (First 1-5 TCP packets)",
-                    ),
-                    selectedKey = settings.fragmentPackets,
-                    onSelect = { v -> viewModel.updateSettings { it.copy(fragmentPackets = v) } },
-                )
-                TextRow(
-                    label = "Fragment Length (bytes, e.g. 50-100)",
-                    value = settings.fragmentLength,
-                    onChange = { v -> viewModel.updateSettings { it.copy(fragmentLength = v) } },
-                )
-                TextRow(
-                    label = "Fragment Interval / Delay (ms, e.g. 10-20)",
-                    value = settings.fragmentInterval,
-                    onChange = { v -> viewModel.updateSettings { it.copy(fragmentInterval = v) } },
-                )
-            }
-        }
-
-        SectionCard(stringResource(R.string.section_routing)) {
-            Picker(
-                label = stringResource(R.string.setting_route_mode),
+            SettingsListItem(
+                title = "Core log level",
                 options = listOf(
-                    "global" to stringResource(R.string.route_global),
-                    "white_iran" to "Bypass Iran (white_iran — .ir & Iranian IPs Direct)",
-                    "rule" to stringResource(R.string.route_rule),
-                    "direct" to stringResource(R.string.route_direct),
+                    "debug" to "debug",
+                    "info" to "info",
+                    "warning" to "warning",
+                    "error" to "error",
+                    "none" to "none",
                 ),
-                selectedKey = settings.routeMode,
-                onSelect = { value -> viewModel.updateSettings { it.copy(routeMode = value) } },
-            )
-            Picker(
-                label = "Routing Domain Strategy",
-                options = listOf(
-                    "AsIs" to "AsIs (Fastest — Recommended)",
-                    "IPIfNonMatch" to "IPIfNonMatch",
-                    "IPOnDemand" to "IPOnDemand",
-                ),
-                selectedKey = settings.domainStrategy,
-                onSelect = { value -> viewModel.updateSettings { it.copy(domainStrategy = value) } },
-            )
-            Picker(
-                label = "Outbound Server Domain Resolve",
-                options = listOf(
-                    "happy_eyeballs" to "System DNS + Happy Eyeballs (v2rayNG Default)",
-                    "asis" to "AsIs (Do not pre-resolve)",
-                ),
-                selectedKey = settings.outboundDomainResolve,
-                onSelect = { value -> viewModel.updateSettings { it.copy(outboundDomainResolve = value) } },
-            )
-            ToggleRow(
-                label = stringResource(R.string.setting_bypass_lan),
-                checked = settings.bypassLan,
-                onChange = { on -> viewModel.updateSettings { it.copy(bypassLan = on) } },
-            )
-            ToggleRow(
-                label = stringResource(R.string.setting_bypass_cn),
-                checked = settings.bypassChina,
-                onChange = { on -> viewModel.updateSettings { it.copy(bypassChina = on) } },
-            )
-            ToggleRow(
-                label = stringResource(R.string.setting_block_ads),
-                checked = settings.blockAds,
-                onChange = { on -> viewModel.updateSettings { it.copy(blockAds = on) } },
-            )
-            ToggleRow(
-                label = stringResource(R.string.setting_ipv6),
-                checked = settings.ipv6,
-                onChange = { on -> viewModel.updateSettings { it.copy(ipv6 = on) } },
+                selectedValue = s.logLevel,
+                onSelected = { v -> viewModel.updateSettings { it.copy(logLevel = v) } },
             )
         }
+        AppDivider()
 
-        SectionCard("Per-App Proxy") {
-            ToggleRow(
-                label = "Enable Per-App Proxy",
-                checked = settings.perAppEnabled,
-                onChange = { on -> viewModel.updateSettings { it.copy(perAppEnabled = on) } },
+        // Version Footer (exact v2rayNG VersionInfoBlock)
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = "${stringResource(R.string.app_name)} v${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (settings.perAppEnabled) {
-                Picker(
-                    label = "Per-App Mode",
-                    options = listOf(
-                        "exclude" to "Bypass Selected Apps (Exclude)",
-                        "include" to "Proxy Only Selected Apps (Include)",
-                    ),
-                    selectedKey = settings.perAppMode,
-                    onSelect = { v -> viewModel.updateSettings { it.copy(perAppMode = v) } },
-                )
-                OutlinedButton(
-                    onClick = { showAppPicker = true },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Select Apps (${settings.perAppPackages.size} selected)")
-                }
-            }
-        }
-
-        SectionCard(stringResource(R.string.section_dns)) {
-            TextRow(
-                label = stringResource(R.string.setting_remote_dns),
-                value = settings.remoteDns,
-                onChange = { v -> viewModel.updateSettings { it.copy(remoteDns = v) } },
-            )
-            TextRow(
-                label = stringResource(R.string.setting_direct_dns),
-                value = settings.directDns,
-                onChange = { v -> viewModel.updateSettings { it.copy(directDns = v) } },
-            )
-            TextRow(
-                label = "VPN DNS",
-                value = settings.vpnDns,
-                onChange = { v -> viewModel.updateSettings { it.copy(vpnDns = v) } },
-            )
-            ToggleRow(
-                label = "Enable FakeDNS (198.18.0.0/15)",
-                checked = settings.fakeDns,
-                onChange = { on -> viewModel.updateSettings { it.copy(fakeDns = on) } },
-            )
-            TextRow(
-                label = "Real Delay Test URL",
-                value = settings.delayTestUrl,
-                onChange = { v -> viewModel.updateSettings { it.copy(delayTestUrl = v) } },
-            )
-        }
-
-        SectionCard(stringResource(R.string.section_tunnel)) {
-            ToggleRow(
-                label = stringResource(R.string.setting_sniffing),
-                checked = settings.sniffing,
-                onChange = { on -> viewModel.updateSettings { it.copy(sniffing = on) } },
-            )
-            ToggleRow(
-                label = "Sniffing Route Only",
-                checked = settings.routeOnly,
-                onChange = { on -> viewModel.updateSettings { it.copy(routeOnly = on) } },
-            )
-            ToggleRow(
-                label = stringResource(R.string.setting_tcp_mux),
-                checked = settings.tcpMux,
-                onChange = { on -> viewModel.updateSettings { it.copy(tcpMux = on) } },
-            )
-            ToggleRow(
-                label = stringResource(R.string.setting_tcp_fast_open),
-                checked = settings.tcpFastOpen,
-                onChange = { on -> viewModel.updateSettings { it.copy(tcpFastOpen = on) } },
-            )
-            Picker(
-                label = stringResource(R.string.setting_log_level),
-                options = listOf("debug", "info", "warning", "error", "none")
-                    .map { it to it },
-                selectedKey = settings.logLevel,
-                onSelect = { v -> viewModel.updateSettings { it.copy(logLevel = v) } },
-            )
-        }
-
-        SectionCard(stringResource(R.string.section_about)) {
-            InfoRow(stringResource(R.string.about_version), BuildConfig.VERSION_NAME)
-            InfoRow(
-                stringResource(R.string.about_engine),
-                (Engines.active.value ?: Engines.obtain()).implementationName,
-            )
-            InfoRow(
-                stringResource(R.string.about_engine_state),
-                stringResource(
-                    if ((Engines.active.value ?: Engines.obtain()).functional) {
-                        R.string.engine_ready
-                    } else {
-                        R.string.engine_missing_title
-                    },
-                ),
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = viewModel.engineName,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
 
     if (showAppPicker) {
         PerAppPickerDialog(
-            selectedPackages = settings.perAppPackages,
-            onTogglePackage = { pkg, checked ->
-                viewModel.updateSettings { cur ->
-                    val next = if (checked) cur.perAppPackages + pkg else cur.perAppPackages - pkg
-                    cur.copy(perAppPackages = next)
-                }
-            },
+            selected = s.perAppPackages,
             onDismiss = { showAppPicker = false },
+            onSave = { next ->
+                viewModel.updateSettings { it.copy(perAppPackages = next) }
+                showAppPicker = false
+            },
         )
     }
 }
 
-private data class InstalledAppItem(
-    val label: String,
-    val packageName: String,
-    val isSystem: Boolean,
-)
+@Composable
+private fun CollapsiblePreferenceGroupHeader(
+    title: String,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onExpandedChange(!expanded) }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.secondary,
+            modifier = Modifier.weight(1f),
+        )
+        Icon(
+            imageVector = Icons.Filled.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.secondary,
+            modifier = Modifier
+                .size(24.dp)
+                .rotate(if (expanded) 180f else 0f),
+        )
+    }
+}
 
 @Composable
-private fun PerAppPickerDialog(
-    selectedPackages: Set<String>,
-    onTogglePackage: (String, Boolean) -> Unit,
-    onDismiss: () -> Unit,
+private fun SettingsSwitchItem(
+    title: String,
+    summary: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
 ) {
-    val context = LocalContext.current
-    var search by remember { mutableStateOf("") }
-    var showSystem by remember { mutableStateOf(false) }
-
-    val allApps = remember {
-        val pm = context.packageManager
-        runCatching {
-            pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                .filter { it.packageName != context.packageName }
-                .map { appInfo ->
-                    val label = runCatching { pm.getApplicationLabel(appInfo).toString() }
-                        .getOrDefault(appInfo.packageName)
-                    val isSys = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                    InstalledAppItem(label, appInfo.packageName, isSys)
-                }
-                .sortedWith(
-                    compareByDescending<InstalledAppItem> { it.packageName in selectedPackages }
-                        .thenBy { it.label.lowercase() },
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (!summary.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = summary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-        }.getOrDefault(emptyList())
+            }
+        }
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.scale(0.82f),
+            colors = SwitchDefaults.colors(
+                checkedThumbColor = MaterialTheme.colorScheme.onSecondary,
+                checkedTrackColor = MaterialTheme.colorScheme.secondary,
+            ),
+        )
     }
+}
 
-    val filtered = remember(allApps, search, showSystem, selectedPackages) {
-        val q = search.trim().lowercase()
-        allApps.filter { app ->
-            val sysOk = showSystem || !app.isSystem || app.packageName in selectedPackages
-            val qOk = q.isEmpty() || app.label.lowercase().contains(q) || app.packageName.lowercase().contains(q)
-            sysOk && qOk
+@Composable
+private fun SettingsListItem(
+    title: String,
+    options: List<Pair<String, String>>,
+    selectedValue: String,
+    onSelected: (String) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+    val summary = options.firstOrNull { it.first == selectedValue }?.second ?: selectedValue
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(title) },
+            text = {
+                Column {
+                    options.forEach { (key, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    showDialog = false
+                                    onSelected(key)
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = key == selectedValue,
+                                onClick = {
+                                    showDialog = false
+                                    onSelected(key)
+                                },
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(label, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun SettingsEditItem(
+    title: String,
+    value: String,
+    onValueChanged: (String) -> Unit,
+) {
+    var showDialog by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showDialog = true }
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(modifier = Modifier.height(3.dp))
+            Text(
+                text = value,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    if (showDialog) {
+        var text by remember(value) { mutableStateOf(value) }
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text(title) },
+            text = {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showDialog = false
+                        onValueChanged(text.trim())
+                    },
+                ) {
+                    Text(stringResource(R.string.action_ok))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDialog = false }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
+            },
+        )
+    }
+}
+
+@Composable
+private fun SettingsMenuItem(
+    title: String,
+    subtitle: String? = null,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            if (!subtitle.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PerAppPickerDialog(
+    selected: Set<String>,
+    onDismiss: () -> Unit,
+    onSave: (Set<String>) -> Unit,
+) {
+    val context = LocalContext.current
+    var searchQuery by remember { mutableStateOf("") }
+    var showSystemApps by remember { mutableStateOf(false) }
+
+    val apps = remember(showSystemApps) {
+        val pm = context.packageManager
+        pm.getInstalledApplications(0)
+            .asSequence()
+            .filter {
+                it.packageName != context.packageName &&
+                    (showSystemApps || (it.flags and ApplicationInfo.FLAG_SYSTEM) == 0 || (it.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0)
+            }
+            .map { info ->
+                val label = runCatching { pm.getApplicationLabel(info).toString() }
+                    .getOrDefault(info.packageName)
+                label to info.packageName
+            }
+            .sortedWith(compareBy({ !selected.contains(it.second) }, { it.first.lowercase() }))
+            .toList()
+    }
+
+    val filteredApps = remember(apps, searchQuery) {
+        val q = searchQuery.trim().lowercase()
+        if (q.isEmpty()) apps
+        else apps.filter { (label, pkg) -> label.lowercase().contains(q) || pkg.lowercase().contains(q) }
+    }
+
+    var working by remember { mutableStateOf(selected) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Per-App Proxy (${selectedPackages.size} selected)") },
+        title = { Text("Per-App Proxy") },
         text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 460.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
-                    value = search,
-                    onValueChange = { search = it },
-                    placeholder = { Text("Search apps…") },
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Search apps...") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text("Show system apps", style = MaterialTheme.typography.bodySmall)
-                    Switch(checked = showSystem, onCheckedChange = { showSystem = it })
-                }
-                LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f, fill = false),
+                        .clickable { showSystemApps = !showSystemApps },
                 ) {
-                    items(filtered, key = { it.packageName }) { app ->
-                        val checked = app.packageName in selectedPackages
+                    Checkbox(checked = showSystemApps, onCheckedChange = { showSystemApps = it })
+                    Text("Show system apps", style = MaterialTheme.typography.bodySmall)
+                }
+                LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                    items(filteredApps, key = { it.second }) { (label, pkg) ->
+                        val checked = pkg in working
                         Row(
+                            verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onTogglePackage(app.packageName, !checked) }
+                                .clickable { working = if (checked) working - pkg else working + pkg }
                                 .padding(vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Checkbox(
                                 checked = checked,
-                                onCheckedChange = { onTogglePackage(app.packageName, it) },
+                                onCheckedChange = {
+                                    working = if (it) working + pkg else working - pkg
+                                },
                             )
-                            Column(Modifier.weight(1f)) {
-                                Text(app.label, style = MaterialTheme.typography.bodyMedium)
+                            Column(Modifier.padding(start = 8.dp)) {
+                                Text(label, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    text = app.packageName,
+                                    pkg,
                                     style = MaterialTheme.typography.labelSmall,
-                                    fontFamily = FontFamily.Monospace,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
@@ -432,98 +710,14 @@ private fun PerAppPickerDialog(
             }
         },
         confirmButton = {
+            TextButton(onClick = { onSave(working) }) {
+                Text(stringResource(R.string.action_save))
+            }
+        },
+        dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Done")
+                Text(stringResource(R.string.action_cancel))
             }
         },
     )
-}
-
-@Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
-    Card {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            content()
-        }
-    }
-}
-
-@Composable
-private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onChange)
-    }
-}
-
-@Composable
-private fun InfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(value, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-@Composable
-private fun TextRow(label: String, value: String, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        label = { Text(label) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun Picker(
-    label: String,
-    options: List<Pair<String, String>>,
-    selectedKey: String,
-    onSelect: (String) -> Unit,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedLabel = options.firstOrNull { it.first == selectedKey }?.second ?: selectedKey
-
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        OutlinedTextField(
-            value = selectedLabel,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier
-                .menuAnchor()
-                .fillMaxWidth(),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { (key, text) ->
-                DropdownMenuItem(
-                    text = { Text(text) },
-                    onClick = {
-                        onSelect(key)
-                        expanded = false
-                    },
-                )
-            }
-        }
-    }
 }

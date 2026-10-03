@@ -7,14 +7,14 @@ import app.nebulabox.util.AppLogger
 import java.io.File
 
 /**
- * JNI bridge for `libhev-socks5-tunnel.so` (from `2dust/v2rayNG` 2.3.10).
+ * JNI bridge for `libhev-socks5-tunnel.so` extracted from `2dust/v2rayNG` 2.3.10.
  *
- * Package and class name MUST remain `com.v2ray.ang.service.TProxyService` because
- * `libhev-socks5-tunnel.so` registers JNI methods on `com/v2ray/ang/service/TProxyService`
- * inside `JNI_OnLoad`.
+ * IMPORTANT: The package name (`com.v2ray.ang.service`), class name (`TProxyService`),
+ * and the exact 4 `@JvmStatic external` method signatures (`(Ljava/lang/String;I)Z`,
+ * `()Z`, `()Z`, `()[J`) MUST remain unchanged because `libhev-socks5-tunnel.so`
+ * registers all 4 via `RegisterNatives` inside `JNI_OnLoad`.
  */
 class TProxyService {
-
     companion object {
         private const val TAG = "HevTun"
 
@@ -26,58 +26,67 @@ class TProxyService {
         var isRunning: Boolean = false
             private set
 
-        @JvmStatic
-        @Suppress("FunctionName")
-        private external fun TProxyStartService(configPath: String, fd: Int)
-
-        @JvmStatic
-        @Suppress("FunctionName")
-        private external fun TProxyStopService()
-
-        @JvmStatic
-        @Suppress("FunctionName")
-        private external fun TProxyGetStats(): LongArray?
-
         init {
-            isLoaded = try {
+            try {
                 System.loadLibrary("hev-socks5-tunnel")
-                AppLogger.i(TAG, "libhev-socks5-tunnel.so loaded successfully")
-                true
+                isLoaded = true
+                AppLogger.i(TAG, "libhev-socks5-tunnel.so loaded successfully via JNI_OnLoad")
             } catch (t: Throwable) {
-                AppLogger.w(TAG, "libhev-socks5-tunnel.so not available, will use Xray native TUN: ${t.message}")
-                false
+                isLoaded = false
+                AppLogger.w(TAG, "libhev-socks5-tunnel.so failed to load, falling back to Xray native TUN: ${t.message}")
             }
         }
 
-        fun start(context: Context, vpnInterface: ParcelFileDescriptor, settings: AppSettings): Boolean {
+        @JvmStatic
+        @Suppress("FunctionName")
+        external fun TProxyStartService(configPath: String, fd: Int): Boolean
+
+        @JvmStatic
+        @Suppress("FunctionName")
+        external fun TProxyStopService(): Boolean
+
+        @JvmStatic
+        @Suppress("FunctionName")
+        external fun TProxyIsRunning(): Boolean
+
+        @JvmStatic
+        @Suppress("FunctionName")
+        external fun TProxyGetStats(): LongArray?
+
+        @Synchronized
+        fun start(
+            context: Context,
+            vpnInterface: ParcelFileDescriptor,
+            settings: AppSettings,
+        ): Boolean {
             if (!isLoaded) return false
+            if (isRunning) {
+                stop()
+            }
+            val configContent = buildConfig(settings)
+            val configFile = File(context.filesDir, "hev-socks5-tunnel.yaml")
+            configFile.writeText(configContent)
+            AppLogger.d(TAG, "Starting hev-socks5-tunnel (fd=${vpnInterface.fd}, port=${settings.socksPort})")
             return try {
-                if (isRunning) {
-                    runCatching { TProxyStopService() }
-                    isRunning = false
-                }
-                val configContent = buildHevConfig(settings)
-                val configFile = File(context.filesDir, "hev-socks5-tunnel.yaml").apply {
-                    writeText(configContent)
-                }
-                AppLogger.i(TAG, "Starting hev-socks5-tunnel (fd=${vpnInterface.fd}, port=${settings.socksPort})")
                 TProxyStartService(configFile.absolutePath, vpnInterface.fd)
                 isRunning = true
+                AppLogger.i(TAG, "hev-socks5-tunnel started successfully")
                 true
-            } catch (t: Throwable) {
-                AppLogger.e(TAG, "Failed to start hev-socks5-tunnel: ${t.message}", t)
+            } catch (e: Throwable) {
+                AppLogger.e(TAG, "TProxyStartService failed: ${e.message}", e)
                 isRunning = false
                 false
             }
         }
 
+        @Synchronized
         fun stop() {
             if (!isLoaded || !isRunning) return
             try {
-                AppLogger.i(TAG, "Stopping hev-socks5-tunnel")
+                AppLogger.i(TAG, "Stopping hev-socks5-tunnel...")
                 TProxyStopService()
-            } catch (t: Throwable) {
-                AppLogger.e(TAG, "Failed to stop hev-socks5-tunnel: ${t.message}", t)
+            } catch (e: Throwable) {
+                AppLogger.w(TAG, "TProxyStopService failed: ${e.message}")
             } finally {
                 isRunning = false
             }
@@ -85,28 +94,31 @@ class TProxyService {
 
         fun getStats(): LongArray? {
             if (!isLoaded || !isRunning) return null
-            return runCatching { TProxyGetStats() }.getOrNull()
+            return try {
+                TProxyGetStats()
+            } catch (_: Throwable) {
+                null
+            }
         }
 
-        private fun buildHevConfig(settings: AppSettings): String = buildString {
+        private fun buildConfig(settings: AppSettings): String {
             val safeMtu = if (settings.mtu in 1280..1500) settings.mtu else 1500
-            appendLine("tunnel:")
-            appendLine("  mtu: $safeMtu")
-            appendLine("  ipv4: 10.10.14.1")
-            if (settings.ipv6) {
-                appendLine("  ipv6: 'fc00::10:10:14:1'")
+            return buildString {
+                appendLine("tunnel:")
+                appendLine("  mtu: $safeMtu")
+                appendLine("  ipv4: 10.10.14.1")
+                if (settings.ipv6) {
+                    appendLine("  ipv6: 'fc00::10:10:14:1'")
+                }
+                appendLine("socks5:")
+                appendLine("  port: ${settings.socksPort}")
+                appendLine("  address: 127.0.0.1")
+                appendLine("  udp: 'udp'")
+                appendLine("misc:")
+                appendLine("  tcp-read-write-timeout: 300000")
+                appendLine("  udp-read-write-timeout: 60000")
+                appendLine("  log-level: warn")
             }
-            appendLine("socks5:")
-            appendLine("  port: ${settings.socksPort}")
-            appendLine("  address: 127.0.0.1")
-            appendLine("  udp: 'udp'")
-            appendLine("misc:")
-            appendLine("  task-stack-size: 81920")
-            appendLine("  tcp-buffer-size: 65536")
-            appendLine("  read-write-timeout: 300000")
-            appendLine("  connect-timeout: 10000")
-            appendLine("  log-file: stderr")
-            appendLine("  log-level: warn")
         }
     }
 }

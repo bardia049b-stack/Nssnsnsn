@@ -14,16 +14,13 @@ import java.net.InetAddress
  * Translates a [Profile] + [AppSettings] pair into an Xray-core v1.260327.1
  * (`2dust/AndroidLibXrayLite v26.9.30` / `v2rayNG 2.3.10`) JSON configuration.
  *
- * Key alignments with v2rayNG (`CoreConfigManager.kt` & `CoreOutboundBuilder.kt`):
- *  - Simplified flat outbound settings (`address`, `port`, `id`/`password`, `level = 8`)
- *  - WebSocket path preserves `?ed=2560` so Xray's `WebSocketConfig.Build()` enables 0-RTT early data
- *  - Pre-resolves outbound proxy server domain via Android system DNS into `dns.hosts`
- *    and enables `sockopt.domainStrategy = "UseIP"` + `happyEyeballs` (250ms race)
- *  - Intercepts UDP port 53 via `"protocol": "dns"` (`dns-out`) so TCP-only Cloudflare Workers
- *    resolve all DNS queries reliably over DoH/TCP
- *  - Supports Xray `finalmask` TLS Fragment & UDP Noise for bypassing ISP SNI/DPI filtering
- *  - Supports both `hev-socks5-tunnel` mode (`socks` inbound on 127.0.0.1:10808) and
- *    Xray Native TUN mode (`"protocol": "tun"` inbound)
+ * Strictly aligned with `v2rayNG`'s `CoreConfigManager.kt` & `CoreOutboundBuilder.kt`:
+ *  - `buildForSpeedtest`: matches `postProcessForSpeedtest()` (`inbounds = []`, `routing.rules = []`,
+ *    `dns = null`, `mux = null`), so real-ping tests never load `geosite.dat`/`geoip.dat`.
+ *  - `build`: includes `v2rayNG`'s hardcoded DoH/DoT bootstrap hosts in `dns.hosts`,
+ *    pre-resolves the proxy server domain via Android system DNS (`resolveOutboundDomainsToHosts`),
+ *    uses `"domain:ir", "geosite:category-ir"` + `"geoip:ir"` for `white_iran` (never `"geosite:ir"`),
+ *    and hijacks port 53 via `dns-out` (`"protocol": "dns"`).
  */
 object ConfigBuilder {
 
@@ -40,31 +37,53 @@ object ConfigBuilder {
         if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
             return buildCustomConfig(profile, s, forSpeedtest = false)
         }
-        return buildStandardXrayConfig(profile, s, forSpeedtest = false)
+        return buildStandardXrayConfig(profile, s, forSpeedtest = false, includeGeoRules = true)
     }
 
     /**
-     * Generates a lightweight Xray config with no inbounds for `Libv2ray.measureOutboundDelay`,
-     * matching v2rayNG's `CoreConfigManager.getV2rayConfig4Speedtest`.
+     * Fallback config without any `geosite:` / `geoip:` rules in case geo asset files
+     * are unavailable or corrupted on disk.
+     */
+    fun buildWithoutGeoRules(profile: Profile, settings: AppSettings): String {
+        val s = settings.normalized()
+        if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
+            return buildCustomConfig(profile, s, forSpeedtest = false)
+        }
+        return buildStandardXrayConfig(profile, s, forSpeedtest = false, includeGeoRules = false)
+    }
+
+    /**
+     * Generates a lightweight Xray config for `Libv2ray.measureOutboundDelay`,
+     * matching `v2rayNG`'s `CoreConfigManager.getV2rayConfig4Speedtest` (`postProcessForSpeedtest`).
      */
     fun buildForSpeedtest(profile: Profile, settings: AppSettings): String {
         val s = settings.normalized()
         if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
             return buildCustomConfig(profile, s, forSpeedtest = true)
         }
-        return buildStandardXrayConfig(profile, s, forSpeedtest = true)
+        return buildStandardXrayConfig(profile, s, forSpeedtest = true, includeGeoRules = false)
     }
+
+    private fun defaultBootstrapDnsHosts(): LinkedHashMap<String, Any?> = linkedMapOf(
+        "domain:googleapis.cn" to "googleapis.com",
+        "dns.alidns.com" to listOf("223.5.5.5", "223.6.6.6", "2400:3200::1", "2400:3200:baba::1"),
+        "one.one.one.one" to listOf("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"),
+        "1dot1dot1dot1.cloudflare-dns.com" to listOf("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"),
+        "dns.cloudflare.com" to listOf("162.159.61.8", "172.64.41.8", "2a06:98c1:52::8", "2803:f800:53::8"),
+        "cloudflare-dns.com" to listOf("104.16.248.249", "104.16.249.249", "2606:4700::6810:f8f9", "2606:4700::6810:f9f9"),
+        "dns.google" to listOf("8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"),
+        "dns.quad9.net" to listOf("9.9.9.9", "149.112.112.112", "2620:fe::fe", "2620:fe::9"),
+    )
 
     private fun buildStandardXrayConfig(
         profile: Profile,
         settings: AppSettings,
         forSpeedtest: Boolean,
+        includeGeoRules: Boolean,
     ): String {
-        val dnsHosts = linkedMapOf<String, Any?>(
-            "domain:googleapis.cn" to "googleapis.com",
-        )
+        val dnsHosts = defaultBootstrapDnsHosts()
 
-        val proxyOutbound = buildOutbound(profile, settings, dnsHosts)
+        val proxyOutbound = buildOutbound(profile, settings, dnsHosts, forSpeedtest)
         val directOutbound = mapObj(
             "tag" to "direct",
             "protocol" to "freedom",
@@ -86,53 +105,58 @@ object ConfigBuilder {
                 "response" to mapObj("type" to "http"),
             ),
         )
+
+        // Matches v2rayNG's postProcessForSpeedtest:
+        // When forSpeedtest == true, strip inbounds, dns, fakedns, stats, policy, and routing rules.
+        if (forSpeedtest) {
+            val speedtestRoot = mapObj(
+                "remarks" to profile.displayName,
+                "log" to mapObj("loglevel" to "warning"),
+                "outbounds" to listOf(proxyOutbound, directOutbound, blockOutbound),
+                "routing" to mapObj(
+                    "domainStrategy" to "AsIs",
+                    "rules" to emptyList<Map<String, Any?>>(),
+                ),
+            )
+            return Json.any(speedtestRoot)
+        }
+
         val dnsOutbound = mapObj(
             "tag" to "dns-out",
             "protocol" to "dns",
         )
-
-        val outbounds = if (forSpeedtest) {
-            listOf(proxyOutbound, directOutbound, blockOutbound)
-        } else {
-            listOf(proxyOutbound, directOutbound, blockOutbound, dnsOutbound)
-        }
+        val outbounds = listOf(proxyOutbound, directOutbound, blockOutbound, dnsOutbound)
 
         val root = linkedMapOf<String, Any?>()
         root["remarks"] = profile.displayName
-        root["log"] = mapObj(
-            "loglevel" to if (forSpeedtest) "error" else settings.logLevel,
-        )
-
-        if (!forSpeedtest) {
-            root["stats"] = emptyMap<String, Any?>()
-            root["policy"] = mapObj(
-                "levels" to mapObj(
-                    "8" to mapObj(
-                        "handshake" to 4,
-                        "connIdle" to 300,
-                        "uplinkOnly" to 1,
-                        "downlinkOnly" to 1,
-                    ),
+        root["log"] = mapObj("loglevel" to settings.logLevel)
+        root["stats"] = emptyMap<String, Any?>()
+        root["policy"] = mapObj(
+            "levels" to mapObj(
+                "8" to mapObj(
+                    "handshake" to 4,
+                    "connIdle" to 300,
+                    "uplinkOnly" to 1,
+                    "downlinkOnly" to 1,
                 ),
-                "system" to mapObj(
-                    "statsOutboundUplink" to true,
-                    "statsOutboundDownlink" to true,
+            ),
+            "system" to mapObj(
+                "statsOutboundUplink" to true,
+                "statsOutboundDownlink" to true,
+            ),
+        )
+        root["inbounds"] = buildInbounds(settings)
+        if (settings.fakeDns) {
+            root["fakedns"] = listOf(
+                mapObj(
+                    "ipPool" to "198.18.0.0/15",
+                    "poolSize" to 10000,
                 ),
             )
-            root["inbounds"] = buildInbounds(settings)
-            if (settings.fakeDns) {
-                root["fakedns"] = listOf(
-                    mapObj(
-                        "ipPool" to "198.18.0.0/15",
-                        "poolSize" to 10000,
-                    ),
-                )
-            }
         }
-
-        root["dns"] = buildDns(settings, dnsHosts)
+        root["dns"] = buildDns(settings, dnsHosts, includeGeoRules)
         root["outbounds"] = outbounds
-        root["routing"] = buildRouting(settings, forSpeedtest)
+        root["routing"] = buildRouting(profile, settings, includeGeoRules)
 
         return Json.any(root)
     }
@@ -147,14 +171,7 @@ object ConfigBuilder {
             destOverride.addAll(listOf("http", "tls", "quic"))
         }
         if (settings.fakeDns) {
-            if (settings.sniffing) {
-                destOverride.add("fakedns+others")
-                destOverride.remove("http")
-                destOverride.remove("tls")
-                destOverride.remove("quic")
-            } else {
-                destOverride.add("fakedns")
-            }
+            destOverride.add("fakedns")
         }
 
         val sniffingObj = mapObj(
@@ -163,7 +180,7 @@ object ConfigBuilder {
             "routeOnly" to settings.routeOnly,
         )
 
-        // 1. Local SOCKS5 + HTTP proxy inbound (v2rayNG default port 10808)
+        // 1. Local SOCKS5 inbound (v2rayNG default port 10808)
         list.add(
             mapObj(
                 "tag" to "socks",
@@ -204,6 +221,7 @@ object ConfigBuilder {
     private fun buildDns(
         settings: AppSettings,
         dnsHosts: Map<String, Any?>,
+        includeGeoRules: Boolean,
     ): Map<String, Any?> {
         val servers = mutableListOf<Any?>()
         if (settings.fakeDns) {
@@ -214,16 +232,17 @@ object ConfigBuilder {
         servers.add(remote)
 
         val direct = settings.directDns.trim().ifBlank { "8.8.8.8" }
-        if (settings.routeMode == "white_iran") {
+        if (includeGeoRules && settings.routeMode == "white_iran") {
+            // Exact v2rayNG custom_routing_white_iran domain list: "domain:ir", "geosite:category-ir"
             servers.add(
                 mapObj(
                     "address" to direct,
-                    "domains" to listOf("geosite:ir", "regexp:.*\\.ir$"),
+                    "domains" to listOf("domain:ir", "geosite:category-ir"),
                     "skipFallback" to true,
                     "tag" to "domestic-dns",
                 ),
             )
-        } else if (settings.bypassChina) {
+        } else if (includeGeoRules && settings.bypassChina) {
             servers.add(
                 mapObj(
                     "address" to direct,
@@ -232,8 +251,6 @@ object ConfigBuilder {
                     "tag" to "domestic-dns",
                 ),
             )
-        } else {
-            servers.add(direct)
         }
 
         val queryStrategy = when {
@@ -253,41 +270,39 @@ object ConfigBuilder {
     // --------------------------------------------------------------- Routing
 
     private fun buildRouting(
+        profile: Profile,
         settings: AppSettings,
-        forSpeedtest: Boolean,
+        includeGeoRules: Boolean,
     ): Map<String, Any?> {
         val rules = mutableListOf<Map<String, Any?>>()
 
-        if (!forSpeedtest) {
-            // Route UDP port 53 DNS packets through Xray's internal dns-out handler
-            // so DNS resolves reliably over TCP/DoH even when the proxy server is TCP-only (e.g. Cloudflare Workers)
+        // 1. Hijack port 53 on local inbounds to Xray's internal dns-out handler
+        // (Matches v2rayNG configureLocalDns / configureRootModeDns so DNS works over DoH/TCP)
+        val activeInboundTags = if (settings.useHevTun) listOf("socks") else listOf("tun", "socks")
+        rules.add(
+            mapObj(
+                "type" to "field",
+                "inboundTag" to activeInboundTags,
+                "port" to "53",
+                "outboundTag" to "dns-out",
+            ),
+        )
+
+        // 2. Block UDP 443 (QUIC) on TCP/WS/gRPC/XHTTP outbounds (matches v2rayNG custom_routing_global / white_iran)
+        val isUdpNativeProtocol = profile.protocol in setOf(Protocol.HYSTERIA2, Protocol.TUIC, Protocol.WIREGUARD)
+        if (!isUdpNativeProtocol) {
             rules.add(
                 mapObj(
                     "type" to "field",
-                    "port" to "53",
+                    "port" to "443",
                     "network" to "udp",
-                    "outboundTag" to "dns-out",
+                    "outboundTag" to "block",
                 ),
             )
         }
 
-        // Route Xray's remote DNS module through proxy, domestic DNS through direct
-        rules.add(
-            mapObj(
-                "type" to "field",
-                "inboundTag" to listOf("dns-module"),
-                "outboundTag" to "proxy",
-            ),
-        )
-        rules.add(
-            mapObj(
-                "type" to "field",
-                "inboundTag" to listOf("domestic-dns"),
-                "outboundTag" to "direct",
-            ),
-        )
-
-        if (settings.blockAds) {
+        // 3. Optional ad blocking
+        if (includeGeoRules && settings.blockAds) {
             rules.add(
                 mapObj(
                     "type" to "field",
@@ -297,52 +312,76 @@ object ConfigBuilder {
             )
         }
 
+        // 4. Bypass private LAN IP & domains
         if (settings.bypassLan) {
-            rules.add(
-                mapObj(
-                    "type" to "field",
-                    "ip" to listOf("geoip:private"),
-                    "outboundTag" to "direct",
-                ),
-            )
-            rules.add(
-                mapObj(
-                    "type" to "field",
-                    "domain" to listOf("geosite:private"),
-                    "outboundTag" to "direct",
-                ),
-            )
-        }
-
-        when (settings.routeMode) {
-            "white_iran" -> {
-                // v2rayNG custom_routing_white_iran preset
+            if (includeGeoRules) {
                 rules.add(
                     mapObj(
                         "type" to "field",
-                        "ip" to listOf("geoip:ir"),
+                        "ip" to listOf("ext:geoip-only-cn-private.dat:private"),
                         "outboundTag" to "direct",
                     ),
                 )
                 rules.add(
                     mapObj(
                         "type" to "field",
-                        "domain" to listOf(
-                            "geosite:ir",
-                            "regexp:.*\\.ir$",
-                            "ext:iran.dat:ir",
-                        ).filter { !it.startsWith("ext:") },
+                        "domain" to listOf("geosite:private"),
+                        "outboundTag" to "direct",
+                    ),
+                )
+            } else {
+                rules.add(
+                    mapObj(
+                        "type" to "field",
+                        "ip" to listOf(
+                            "10.0.0.0/8",
+                            "127.0.0.0/8",
+                            "172.16.0.0/12",
+                            "192.168.0.0/16",
+                            "169.254.0.0/16",
+                        ),
                         "outboundTag" to "direct",
                     ),
                 )
             }
+        }
 
-            "rule" -> {
-                if (settings.bypassChina) {
+        // 5. Regional routing presets
+        when (settings.routeMode) {
+            "white_iran" -> {
+                if (includeGeoRules) {
+                    // Exact v2rayNG custom_routing_white_iran rules
                     rules.add(
                         mapObj(
                             "type" to "field",
-                            "ip" to listOf("geoip:cn"),
+                            "domain" to listOf("domain:ir", "geosite:category-ir"),
+                            "outboundTag" to "direct",
+                        ),
+                    )
+                    rules.add(
+                        mapObj(
+                            "type" to "field",
+                            "ip" to listOf("geoip:ir"),
+                            "outboundTag" to "direct",
+                        ),
+                    )
+                } else {
+                    rules.add(
+                        mapObj(
+                            "type" to "field",
+                            "domain" to listOf("domain:ir"),
+                            "outboundTag" to "direct",
+                        ),
+                    )
+                }
+            }
+
+            "rule" -> {
+                if (includeGeoRules && settings.bypassChina) {
+                    rules.add(
+                        mapObj(
+                            "type" to "field",
+                            "ip" to listOf("ext:geoip-only-cn-private.dat:cn"),
                             "outboundTag" to "direct",
                         ),
                     )
@@ -360,18 +399,36 @@ object ConfigBuilder {
                 rules.add(
                     mapObj(
                         "type" to "field",
-                        "network" to "tcp,udp",
+                        "port" to "0-65535",
                         "outboundTag" to "direct",
                     ),
                 )
             }
         }
 
-        // Catch-all rule -> proxy (matches v2rayNG default catch-all)
+        // 6. DNS module routing (matches v2rayNG configureDns)
+        if (includeGeoRules && (settings.routeMode == "white_iran" || settings.bypassChina)) {
+            rules.add(
+                mapObj(
+                    "type" to "field",
+                    "inboundTag" to listOf("domestic-dns"),
+                    "outboundTag" to "direct",
+                ),
+            )
+        }
         rules.add(
             mapObj(
                 "type" to "field",
-                "network" to "tcp,udp",
+                "inboundTag" to listOf("dns-module"),
+                "outboundTag" to "proxy",
+            ),
+        )
+
+        // 7. Catch-all rule -> proxy (matches v2rayNG custom_routing_global)
+        rules.add(
+            mapObj(
+                "type" to "field",
+                "port" to "0-65535",
                 "outboundTag" to "proxy",
             ),
         )
@@ -388,6 +445,7 @@ object ConfigBuilder {
         p: Profile,
         settings: AppSettings,
         dnsHosts: MutableMap<String, Any?>,
+        forSpeedtest: Boolean,
     ): Map<String, Any?> {
         if (p.protocol == Protocol.DIRECT) {
             return mapObj("tag" to "proxy", "protocol" to "freedom")
@@ -509,23 +567,27 @@ object ConfigBuilder {
             buildStreamSettings(p, settings, resolvedStrategy, happyEyeballs)
         }
 
-        // Mux configuration (matching v2rayNG CoreOutboundBuilder.updateOutboundWithGlobalSettings)
-        val allowMux = settings.tcpMux &&
-            p.protocol in setOf(Protocol.VLESS, Protocol.VMESS) &&
-            p.transport.type.lowercase() != "xhttp"
-        val muxObj = if (allowMux) {
-            val concurrency = if (p.protocol == Protocol.VLESS && p.flow.isNotBlank()) -1 else settings.muxConcurrency
-            mapObj(
-                "enabled" to true,
-                "concurrency" to concurrency,
-                "xudpConcurrency" to settings.muxXudpConcurrency,
-                "xudpProxyUDP443" to settings.muxXudpQuic,
-            )
+        // In speedtest mode, v2rayNG sets mux = null
+        val muxObj = if (forSpeedtest) {
+            null
         } else {
-            mapObj(
-                "enabled" to false,
-                "concurrency" to -1,
-            )
+            val allowMux = settings.tcpMux &&
+                p.protocol in setOf(Protocol.VLESS, Protocol.VMESS) &&
+                p.transport.type.lowercase() != "xhttp"
+            if (allowMux) {
+                val concurrency = if (p.protocol == Protocol.VLESS && p.flow.isNotBlank()) -1 else settings.muxConcurrency
+                mapObj(
+                    "enabled" to true,
+                    "concurrency" to concurrency,
+                    "xudpConcurrency" to settings.muxXudpConcurrency,
+                    "xudpProxyUDP443" to settings.muxXudpQuic,
+                )
+            } else {
+                mapObj(
+                    "enabled" to false,
+                    "concurrency" to -1,
+                )
+            }
         }
 
         return mapObj(
@@ -550,7 +612,6 @@ object ConfigBuilder {
             p.transport.type.ifBlank { "tcp" }.lowercase()
         }
 
-        // Map deprecated h2/http transport in Xray v1.26+ to xhttp or ws if needed
         val network = when (rawNet) {
             "splithttp" -> "xhttp"
             "http", "h2" -> "xhttp"
@@ -591,8 +652,6 @@ object ConfigBuilder {
             }
 
             "ws" -> {
-                // Exactly like v2rayNG CoreOutboundBuilder:
-                // wsSettings.host = host, wsSettings.path = path (preserving ?ed=2560!)
                 val wsHost = p.transport.host
                 val wsPath = ShareLinkParser.buildWsPathWithEd(p.transport)
                 transportSni = wsHost
@@ -783,12 +842,16 @@ object ConfigBuilder {
         val raw = profile.customConfig.trim()
         val parsed = runCatching { Json.miniMap(raw) }.getOrNull() ?: return raw
 
-        // If it's already a full Xray config (has `outbounds` with `protocol`)
         val outbounds = parsed["outbounds"] as? List<Map<String, Any?>>
         if (outbounds != null && outbounds.any { it.containsKey("protocol") }) {
             val mutable = LinkedHashMap(parsed)
             if (forSpeedtest) {
                 mutable.remove("inbounds")
+                mutable.remove("dns")
+                mutable.remove("fakedns")
+                mutable.remove("stats")
+                mutable.remove("policy")
+                mutable["routing"] = mapObj("domainStrategy" to "AsIs", "rules" to emptyList<Any>())
             } else {
                 mutable["inbounds"] = buildInbounds(settings)
                 mutable["stats"] = emptyMap<String, Any?>()
@@ -810,24 +873,34 @@ object ConfigBuilder {
             return Json.any(mutable)
         }
 
-        // Single Xray outbound object `{ "protocol": "vless", ... }`
         if (parsed.containsKey("protocol") && parsed.containsKey("settings")) {
             val outboundMap = LinkedHashMap(parsed)
             outboundMap["tag"] = "proxy"
+            if (forSpeedtest) {
+                return Json.any(
+                    mapObj(
+                        "log" to mapObj("loglevel" to "warning"),
+                        "outbounds" to listOf(
+                            outboundMap,
+                            mapObj("tag" to "direct", "protocol" to "freedom"),
+                            mapObj("tag" to "block", "protocol" to "blackhole"),
+                        ),
+                        "routing" to mapObj("domainStrategy" to "AsIs", "rules" to emptyList<Any>()),
+                    ),
+                )
+            }
             val root = linkedMapOf<String, Any?>(
                 "log" to mapObj("loglevel" to settings.logLevel),
-                "dns" to buildDns(settings, emptyMap()),
+                "inbounds" to buildInbounds(settings),
+                "dns" to buildDns(settings, defaultBootstrapDnsHosts(), includeGeoRules = false),
                 "outbounds" to listOf(
                     outboundMap,
                     mapObj("tag" to "direct", "protocol" to "freedom"),
                     mapObj("tag" to "block", "protocol" to "blackhole"),
                     mapObj("tag" to "dns-out", "protocol" to "dns"),
                 ),
-                "routing" to buildRouting(settings, forSpeedtest),
+                "routing" to buildRouting(profile, settings, includeGeoRules = false),
             )
-            if (!forSpeedtest) {
-                root["inbounds"] = buildInbounds(settings)
-            }
             return Json.any(root)
         }
 

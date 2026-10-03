@@ -135,7 +135,19 @@ class TunnelVpnService : VpnService(), TunProvider {
             // Stop any previous hev-socks5-tunnel session before starting
             TProxyService.stop()
 
-            engine.start(activeProfileName, config, safeMtu) { openTun(settings) }
+            try {
+                engine.start(activeProfileName, config, safeMtu) { openTun(settings) }
+            } catch (geoErr: Throwable) {
+                val msg = geoErr.message.orEmpty()
+                if (msg.contains("geodata") || msg.contains("geosite") || msg.contains("geoip")) {
+                    AppLogger.w(TAG, "Geodata error detected ($msg), retrying without geo rules...")
+                    val fallbackConfig = ConfigBuilder.buildWithoutGeoRules(profile, settings)
+                    AppLogger.recordGeneratedConfig(fallbackConfig)
+                    engine.start(activeProfileName, fallbackConfig, safeMtu) { openTun(settings) }
+                } else {
+                    throw geoErr
+                }
+            }
 
             // If using hev-socks5-tunnel mode, start TProxyService on the established TUN fd
             val pfd = interfaceFd
