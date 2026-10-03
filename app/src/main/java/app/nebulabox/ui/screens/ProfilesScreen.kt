@@ -52,9 +52,9 @@ fun ProfilesScreen(
     val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val testingProgress by viewModel.testingProgress.collectAsStateWithLifecycle()
     val isUpdatingSubs by viewModel.updatingSubscriptions.collectAsStateWithLifecycle()
-    val activePingMs by viewModel.activePingMs.collectAsStateWithLifecycle()
-    val isTestingActive by viewModel.isTestingActive.collectAsStateWithLifecycle()
-    val exitIpInfo by viewModel.exitIpInfo.collectAsStateWithLifecycle()
+    val isTestingActive by viewModel.checkingLocation.collectAsStateWithLifecycle()
+    val activePingMs by viewModel.activeDelayMs.collectAsStateWithLifecycle()
+    val exitIpInfo by viewModel.endpointLocation.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
