@@ -13,142 +13,119 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import app.nebulabox.R
 import app.nebulabox.data.Profile
-import app.nebulabox.ui.colorConfigType
+import app.nebulabox.data.Protocol
+import app.nebulabox.ui.colorDanger
 import app.nebulabox.ui.colorPing
-import app.nebulabox.ui.colorPingRed
+import app.nebulabox.ui.colorWarn
 
 @Composable
 fun ServerProfileCard(
     profile: Profile,
-    isSelected: Boolean,
-    subscriptionBadge: String,
+    selected: Boolean,
+    subscriptionName: String?,
     onSelect: () -> Unit,
-    onShare: () -> Unit,
     onEdit: () -> Unit,
+    onShare: () -> Unit,
     onDelete: () -> Unit,
-    onPingSingle: () -> Unit,
+    onPing: () -> Unit,
 ) {
-    val testResult = profile.testDelayString
-    val borderColor = if (isSelected) {
-        MaterialTheme.colorScheme.primary
+    var showMenu by remember { mutableStateOf(false) }
+
+    val cardColor = if (selected) {
+        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
     } else {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
     }
-    val containerColor = if (isSelected) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.22f)
+
+    val borderStroke = if (selected) {
+        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
     } else {
-        MaterialTheme.colorScheme.surface
+        null
+    }
+
+    val subtitleText = remember(profile.protocol, profile.transport.type, profile.tls.enabled, profile.tls.reality, subscriptionName) {
+        buildString {
+            append(profile.protocol.name)
+            if (profile.protocol != Protocol.CUSTOM && profile.protocol != Protocol.WIREGUARD) {
+                append(" · ")
+                append(profile.transport.type.uppercase())
+            }
+            when {
+                profile.tls.reality -> append(" · REALITY")
+                profile.tls.enabled -> append(" · TLS")
+            }
+            if (!subscriptionName.isNullOrBlank()) {
+                append(" · ")
+                append(subscriptionName)
+            }
+        }
     }
 
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 5.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable(onClick = onSelect),
-        shape = RoundedCornerShape(16.dp),
-        color = containerColor,
-        border = BorderStroke(if (isSelected) 1.5.dp else 0.8.dp, borderColor),
+            .clip(RoundedCornerShape(14.dp))
+            .clickable { onSelect() },
+        shape = RoundedCornerShape(14.dp),
+        color = cardColor,
+        border = borderStroke,
     ) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+                .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(
+                        if (selected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    ),
+            )
+
+            Spacer(Modifier.width(12.dp))
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(8.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outline,
-                        ),
-                )
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    text = profile.displayName,
-                    modifier = Modifier.weight(1f),
-                    style = MaterialTheme.typography.titleMedium,
+                FlagText(
+                    text = profile.name.ifBlank { "${profile.server}:${profile.port}" },
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
-                IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_share_24dp),
-                        contentDescription = "Share",
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = onEdit, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_edit_24dp),
-                        contentDescription = "Edit",
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                    Icon(
-                        painter = painterResource(id = R.drawable.ic_delete_24dp),
-                        contentDescription = "Delete",
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(6.dp))
-
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 18.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (subscriptionBadge.isNotEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .size(20.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = subscriptionBadge,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                    Spacer(Modifier.width(6.dp))
-                }
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = profile.formattedAddress,
-                    modifier = Modifier.weight(1f),
+                    text = subtitleText,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -156,49 +133,77 @@ fun ServerProfileCard(
                 )
             }
 
-            Spacer(Modifier.height(10.dp))
+            if (profile.lastDelayMs != 0L) {
+                val isSuccess = profile.lastDelayMs > 0
+                val delayColor = when {
+                    !isSuccess -> colorDanger
+                    profile.lastDelayMs < 350 -> colorPing
+                    profile.lastDelayMs < 800 -> colorWarn
+                    else -> colorDanger
+                }
+                val delayLabel = if (isSuccess) "${profile.lastDelayMs} ms" else "Timeout"
+                Text(
+                    text = delayLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = delayColor,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .clickable { onPing() }
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                )
+            }
 
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 18.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = colorConfigType.copy(alpha = 0.12f),
+            Box {
+                IconButton(
+                    onClick = { showMenu = true },
+                    modifier = Modifier.size(36.dp),
                 ) {
-                    Text(
-                        text = profile.typeDescription,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = colorConfigType,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    Icon(
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "Options",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
                     )
                 }
-
-                if (testResult.isNotEmpty()) {
-                    val isError = profile.lastDelayMs < 0
-                    val pillColor = if (isError) colorPingRed else colorPing
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = pillColor.copy(alpha = 0.14f),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(8.dp))
-                            .clickable(onClick = onPingSingle),
-                    ) {
-                        Text(
-                            text = testResult,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = pillColor,
-                            maxLines = 1,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        )
-                    }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Test Latency") },
+                        onClick = {
+                            showMenu = false
+                            onPing()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Edit") },
+                        onClick = {
+                            showMenu = false
+                            onEdit()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Share / QR Code") },
+                        onClick = {
+                            showMenu = false
+                            onShare()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = {
+                            Text(
+                                text = "Delete",
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                        onClick = {
+                            showMenu = false
+                            onDelete()
+                        },
+                    )
                 }
             }
         }

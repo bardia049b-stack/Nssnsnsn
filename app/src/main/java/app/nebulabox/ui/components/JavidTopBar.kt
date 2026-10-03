@@ -8,13 +8,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -22,15 +18,13 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -43,7 +37,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -57,7 +50,6 @@ import androidx.compose.ui.unit.sp
 import app.nebulabox.R
 import app.nebulabox.data.Protocol
 import app.nebulabox.ui.AppDivider
-import app.nebulabox.ui.colorPing
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -70,7 +62,7 @@ fun JavidTopBar(
     onSearchQueryChange: (String) -> Unit,
     onSearchClose: () -> Unit,
     onSearchToggle: (Boolean) -> Unit,
-    onMenuClick: () -> Unit,
+    onOpenSubscriptions: () -> Unit,
     onCancelTesting: () -> Unit,
     onImportClipboard: () -> Unit,
     onImportUrlOrText: () -> Unit,
@@ -88,7 +80,7 @@ fun JavidTopBar(
     var showImportMenu by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.background(MaterialTheme.colorScheme.background)) {
+    Column(modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {
         TopAppBar(
             title = {
                 if (showSearch) {
@@ -101,14 +93,14 @@ fun JavidTopBar(
                             singleLine = true,
                             textStyle = TextStyle(
                                 color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 15.sp,
+                                fontSize = 16.sp,
                             ),
                             placeholder = {
                                 Text(
                                     "Search servers...",
                                     style = TextStyle(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 15.sp,
+                                        fontSize = 16.sp,
                                     ),
                                 )
                             },
@@ -135,41 +127,17 @@ fun JavidTopBar(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
-                            modifier = Modifier.size(34.dp),
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Icon(
-                                    painter = painterResource(id = R.drawable.ic_javid_logo),
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        }
-                        Column {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Text(
-                                    text = stringResource(R.string.app_name),
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .size(7.dp)
-                                        .clip(CircleShape)
-                                        .background(
-                                            if (isConnected) colorPing
-                                            else MaterialTheme.colorScheme.outline,
-                                        ),
-                                )
-                            }
-                        }
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_javid_logo),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(24.dp),
+                        )
+                        Text(
+                            text = stringResource(R.string.app_name),
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
                     }
                 }
             },
@@ -179,13 +147,6 @@ fun JavidTopBar(
                         Icon(
                             painter = painterResource(id = R.drawable.ic_arrow_back_24dp),
                             contentDescription = "Back",
-                        )
-                    }
-                } else {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_menu_24dp),
-                            contentDescription = "Menu",
                         )
                     }
                 }
@@ -202,42 +163,32 @@ fun JavidTopBar(
                 }
 
                 if (!showSearch) {
-                    FilledTonalIconButton(
-                        onClick = { onSearchToggle(true) },
-                        modifier = Modifier.size(36.dp),
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                        ),
-                    ) {
+                    IconButton(onClick = { onSearchToggle(true) }) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_search_24dp),
                             contentDescription = "Search",
-                            modifier = Modifier.size(18.dp),
                         )
                     }
-                    Spacer(Modifier.width(4.dp))
+                }
+
+                IconButton(onClick = onOpenSubscriptions) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_subscriptions_24dp),
+                        contentDescription = "Subscriptions",
+                    )
                 }
 
                 Box {
-                    FilledTonalIconButton(
-                        onClick = { showImportMenu = true },
-                        modifier = Modifier.size(36.dp),
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                            contentColor = MaterialTheme.colorScheme.primary,
-                        ),
-                    ) {
+                    IconButton(onClick = { showImportMenu = true }) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_add_24dp),
                             contentDescription = "Add",
-                            modifier = Modifier.size(18.dp),
                         )
                     }
                     DropdownMenu(
                         expanded = showImportMenu,
                         onDismissRequest = { showImportMenu = false },
-                        shape = RoundedCornerShape(16.dp),
-                        containerColor = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
                     ) {
                         DropdownMenuItem(
                             text = { Text("Import from Clipboard") },
@@ -289,27 +240,17 @@ fun JavidTopBar(
                     }
                 }
 
-                Spacer(Modifier.width(4.dp))
-
                 Box {
-                    FilledTonalIconButton(
-                        onClick = { showMoreMenu = true },
-                        modifier = Modifier.size(36.dp),
-                        colors = IconButtonDefaults.filledTonalIconButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                        ),
-                    ) {
+                    IconButton(onClick = { showMoreMenu = true }) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_more_vert_24dp),
                             contentDescription = "More",
-                            modifier = Modifier.size(18.dp),
                         )
                     }
                     DropdownMenu(
                         expanded = showMoreMenu,
                         onDismissRequest = { showMoreMenu = false },
-                        shape = RoundedCornerShape(16.dp),
-                        containerColor = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(12.dp),
                     ) {
                         DropdownMenuItem(
                             text = { Text("Real ping all servers") },
@@ -355,13 +296,12 @@ fun JavidTopBar(
                         )
                     }
                 }
-                Spacer(Modifier.width(6.dp))
             },
             colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.background,
-                titleContentColor = MaterialTheme.colorScheme.onBackground,
-                navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
-                actionIconContentColor = MaterialTheme.colorScheme.onBackground,
+                containerColor = MaterialTheme.colorScheme.surface,
+                titleContentColor = MaterialTheme.colorScheme.onSurface,
+                navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                actionIconContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             ),
         )
         AnimatedVisibility(
@@ -372,10 +312,14 @@ fun JavidTopBar(
             LinearProgressIndicator(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(2.5.dp),
+                    .height(2.dp),
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
             )
         }
+        HorizontalDivider(
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+        )
     }
 }
