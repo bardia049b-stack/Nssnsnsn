@@ -4,11 +4,14 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.ui.graphics.Color
 
-val StatusConnected = Color(0xFF4CAF50)
-val StatusWarning = Color(0xFFFFB300)
-val StatusDanger = Color(0xFFF44336)
+val JavidOutlineLight = Color(0xFFC4C6D0)
+val JavidOutlineDark = Color(0xFF44474E)
 
-val JavidDarkColorScheme = darkColorScheme(
+val JavidSuccess = Color(0xFF4CAF50)
+val JavidDanger = Color(0xFFF44336)
+val JavidProtocolTag = Color(0xFF0B57D0)
+
+val JavidDarkColors = darkColorScheme(
     primary = Color(0xFFA8C7FA),
     onPrimary = Color(0xFF062E6F),
     primaryContainer = Color(0xFF0842A0),
@@ -35,7 +38,7 @@ val JavidDarkColorScheme = darkColorScheme(
     onErrorContainer = Color(0xFFFFDAD6),
 )
 
-val JavidLightColorScheme = lightColorScheme(
+val JavidLightColors = lightColorScheme(
     primary = Color(0xFF0B57D0),
     onPrimary = Color(0xFFFFFFFF),
     primaryContainer = Color(0xFFD3E3FD),

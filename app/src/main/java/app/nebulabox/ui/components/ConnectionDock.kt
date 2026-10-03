@@ -32,31 +32,43 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.nebulabox.data.Profile
-import app.nebulabox.data.TrafficSample
-import app.nebulabox.data.TunnelPhase
+import app.nebulabox.engine.TunnelState
+import app.nebulabox.engine.TunnelStatus
 import app.nebulabox.ui.colorPing
+import app.nebulabox.ui.colorPingRed
 import app.nebulabox.util.Formatters
 import app.nebulabox.util.IpLocationChecker
 
 @Composable
 fun ConnectionDock(
-    phase: TunnelPhase,
-    selectedProfile: Profile?,
-    activeDelayMs: Long?,
-    checkingLocation: Boolean,
-    exitIpInfo: IpLocationChecker.IpInfo?,
-    traffic: TrafficSample,
-    onToggleConnection: () -> Unit,
-    onVerifyConnection: () -> Unit,
+    status: TunnelStatus,
+    activeProfileName: String?,
+    activePingMs: Long?,
+    isTestingActive: Boolean,
+    testingProgress: Pair<Int, Int>?,
+    exitIpInfo: IpLocationChecker.EndpointLocation?,
+    onTestCurrentServer: () -> Unit,
+    onToggleService: () -> Unit,
 ) {
-    val isConnected = phase == TunnelPhase.Connected
-    val isTransitioning = phase == TunnelPhase.Starting || phase == TunnelPhase.Stopping
+    val isRunning = status.state == TunnelState.STARTED
+    val isBusy = status.state == TunnelState.STARTING || status.state == TunnelState.STOPPING
 
-    val containerColor = if (isConnected) {
+    val statusText = when {
+        testingProgress != null -> {
+            val left = (testingProgress.second - testingProgress.first).coerceAtLeast(0)
+            "Testing servers ($left / ${testingProgress.second})"
+        }
+        isTestingActive -> "Checking connection..."
+        status.state == TunnelState.STARTED -> "Connected"
+        status.state == TunnelState.STARTING -> "Connecting..."
+        status.state == TunnelState.STOPPING -> "Disconnecting..."
+        else -> "Disconnected"
+    }
+
+    val containerColor = if (isRunning) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
     } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
     }
 
     Surface(
@@ -79,7 +91,7 @@ fun ConnectionDock(
                 Column(
                     modifier = Modifier
                         .weight(1f)
-                        .clickable(enabled = isConnected, onClick = onVerifyConnection),
+                        .clickable(enabled = isRunning, onClick = onTestCurrentServer),
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -90,36 +102,31 @@ fun ConnectionDock(
                                 .size(8.dp)
                                 .clip(CircleShape)
                                 .background(
-                                    when {
-                                        isConnected -> colorPing
-                                        isTransitioning -> MaterialTheme.colorScheme.primary
-                                        else -> MaterialTheme.colorScheme.outline
+                                    when (status.state) {
+                                        TunnelState.STARTED -> colorPing
+                                        TunnelState.STARTING, TunnelState.STOPPING -> MaterialTheme.colorScheme.primary
+                                        TunnelState.STOPPED -> MaterialTheme.colorScheme.outline
                                     },
                                 ),
                         )
                         Text(
-                            text = when (phase) {
-                                TunnelPhase.Connected -> "Connected"
-                                TunnelPhase.Starting -> "Connecting..."
-                                TunnelPhase.Stopping -> "Disconnecting..."
-                                TunnelPhase.Errored -> "Connection error"
-                                TunnelPhase.Idle -> "Disconnected"
-                            },
+                            text = statusText,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (isConnected) {
+                            color = if (isRunning) {
                                 MaterialTheme.colorScheme.primary
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             },
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
 
                     Spacer(Modifier.height(4.dp))
 
                     FlagText(
-                        text = selectedProfile?.name?.ifBlank { selectedProfile.server }
-                            ?: "No server selected",
+                        text = activeProfileName?.ifBlank { "No server selected" } ?: "No server selected",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -131,16 +138,20 @@ fun ConnectionDock(
                 Spacer(Modifier.width(12.dp))
 
                 FilledIconButton(
-                    onClick = onToggleConnection,
+                    onClick = {
+                        if (!isBusy) {
+                            onToggleService()
+                        }
+                    },
                     modifier = Modifier.size(52.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = if (isConnected) {
+                        containerColor = if (isRunning) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.secondaryContainer
                         },
-                        contentColor = if (isConnected) {
+                        contentColor = if (isRunning) {
                             MaterialTheme.colorScheme.onPrimary
                         } else {
                             MaterialTheme.colorScheme.onSecondaryContainer
@@ -149,17 +160,17 @@ fun ConnectionDock(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.PowerSettingsNew,
-                        contentDescription = if (isConnected) "Disconnect" else "Connect",
+                        contentDescription = if (isRunning) "Disconnect" else "Connect",
                         modifier = Modifier.size(24.dp),
                     )
                 }
             }
 
-            AnimatedVisibility(visible = isConnected) {
+            AnimatedVisibility(visible = isRunning) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(onClick = onVerifyConnection),
+                        .clickable(onClick = onTestCurrentServer),
                 ) {
                     Spacer(Modifier.height(12.dp))
                     HorizontalDivider(
@@ -178,7 +189,7 @@ fun ConnectionDock(
                             horizontalArrangement = Arrangement.spacedBy(6.dp),
                             modifier = Modifier.weight(1f),
                         ) {
-                            if (exitIpInfo != null) {
+                            if (exitIpInfo != null && exitIpInfo.ip.isNotBlank()) {
                                 CountryFlagIcon(
                                     countryCode = exitIpInfo.countryCode,
                                     flagEmoji = exitIpInfo.flagEmoji,
@@ -193,7 +204,7 @@ fun ConnectionDock(
                                 )
                             } else {
                                 Text(
-                                    text = if (checkingLocation) "Checking exit IP..." else "Tap to test ping & exit IP",
+                                    text = if (isTestingActive) "Checking exit IP..." else "Tap to check exit IP & delay",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -202,13 +213,13 @@ fun ConnectionDock(
                             }
                         }
 
-                        if (activeDelayMs != null && activeDelayMs > 0) {
+                        if (activePingMs != null && activePingMs != 0L) {
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                text = "$activeDelayMs ms",
+                                text = if (activePingMs > 0L) "$activePingMs ms" else "Timeout",
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                color = colorPing,
+                                color = if (activePingMs > 0L) colorPing else colorPingRed,
                             )
                         }
                     }
@@ -220,12 +231,12 @@ fun ConnectionDock(
                         horizontalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
                         Text(
-                            text = "↑ ${Formatters.formatSpeed(traffic.txRate)}",
+                            text = "↑ ${Formatters.speed(status.uplink)}",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
-                            text = "↓ ${Formatters.formatSpeed(traffic.rxRate)}",
+                            text = "↓ ${Formatters.speed(status.downlink)}",
                             style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )

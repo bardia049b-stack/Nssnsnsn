@@ -36,36 +36,36 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
-import app.nebulabox.ui.colorDanger
 import app.nebulabox.ui.colorPing
-import app.nebulabox.ui.colorWarn
+import app.nebulabox.ui.colorPingRed
 
 @Composable
 fun ServerProfileCard(
     profile: Profile,
-    selected: Boolean,
-    subscriptionName: String?,
+    isSelected: Boolean,
+    subscriptionBadge: String,
     onSelect: () -> Unit,
-    onEdit: () -> Unit,
     onShare: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onPing: () -> Unit,
+    onPingSingle: () -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
+    val testResult = profile.testDelayString
 
-    val cardColor = if (selected) {
+    val cardColor = if (isSelected) {
         MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
     } else {
         MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
     }
 
-    val borderStroke = if (selected) {
+    val borderStroke = if (isSelected) {
         BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
     } else {
         null
     }
 
-    val subtitleText = remember(profile.protocol, profile.transport.type, profile.tls.enabled, profile.tls.reality, subscriptionName) {
+    val subtitleText = remember(profile.protocol, profile.transport.type, profile.tls.enabled, profile.tls.reality, subscriptionBadge) {
         buildString {
             append(profile.protocol.name)
             if (profile.protocol != Protocol.CUSTOM && profile.protocol != Protocol.WIREGUARD) {
@@ -76,9 +76,9 @@ fun ServerProfileCard(
                 profile.tls.reality -> append(" · REALITY")
                 profile.tls.enabled -> append(" · TLS")
             }
-            if (!subscriptionName.isNullOrBlank()) {
+            if (subscriptionBadge.isNotBlank()) {
                 append(" · ")
-                append(subscriptionName)
+                append(subscriptionBadge)
             }
         }
     }
@@ -104,7 +104,7 @@ fun ServerProfileCard(
                     .height(34.dp)
                     .clip(RoundedCornerShape(2.dp))
                     .background(
-                        if (selected) MaterialTheme.colorScheme.primary
+                        if (isSelected) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
                     ),
             )
@@ -116,9 +116,9 @@ fun ServerProfileCard(
                 verticalArrangement = Arrangement.Center,
             ) {
                 FlagText(
-                    text = profile.name.ifBlank { "${profile.server}:${profile.port}" },
+                    text = profile.displayName,
                     style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -133,23 +133,16 @@ fun ServerProfileCard(
                 )
             }
 
-            if (profile.lastDelayMs != 0L) {
-                val isSuccess = profile.lastDelayMs > 0
-                val delayColor = when {
-                    !isSuccess -> colorDanger
-                    profile.lastDelayMs < 350 -> colorPing
-                    profile.lastDelayMs < 800 -> colorWarn
-                    else -> colorDanger
-                }
-                val delayLabel = if (isSuccess) "${profile.lastDelayMs} ms" else "Timeout"
+            if (testResult.isNotBlank()) {
+                val isFailed = profile.lastDelayMs < 0L
                 Text(
-                    text = delayLabel,
+                    text = testResult,
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
-                    color = delayColor,
+                    color = if (isFailed) colorPingRed else colorPing,
                     modifier = Modifier
                         .clip(RoundedCornerShape(6.dp))
-                        .clickable { onPing() }
+                        .clickable { onPingSingle() }
                         .padding(horizontal = 6.dp, vertical = 4.dp),
                 )
             }
@@ -175,7 +168,7 @@ fun ServerProfileCard(
                         text = { Text("Test Latency") },
                         onClick = {
                             showMenu = false
-                            onPing()
+                            onPingSingle()
                         },
                     )
                     DropdownMenuItem(

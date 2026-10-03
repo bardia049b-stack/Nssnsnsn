@@ -18,21 +18,33 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.nebulabox.data.Profile
-import app.nebulabox.data.Subscription
+import app.nebulabox.data.SubscriptionItem
 
 @Composable
 fun SubscriptionGroupBar(
-    subscriptions: List<Subscription>,
+    subscriptions: List<SubscriptionItem>,
     profiles: List<Profile>,
     selectedSubId: String,
-    onSelectSubId: (String) -> Unit,
+    onSelectGroup: (String) -> Unit,
     onPingAll: () -> Unit = {},
     onSortByPing: () -> Unit = {},
 ) {
+    val tabs = remember(subscriptions, profiles) {
+        buildList {
+            add(Triple("", "All", profiles.size))
+            subscriptions.forEach { sub ->
+                val count = profiles.count { it.subscriptionId == sub.id }
+                add(Triple(sub.id, sub.remarks, count))
+            }
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -41,26 +53,16 @@ fun SubscriptionGroupBar(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        FilterChip(
-            selected = selectedSubId.isEmpty(),
-            onClick = { onSelectSubId("") },
-            label = {
-                Text(
-                    text = "All (${profiles.size})",
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            },
-        )
-
-        subscriptions.forEach { sub ->
-            val count = profiles.count { it.subscriptionId == sub.id }
-            val selected = selectedSubId == sub.id
+        tabs.forEach { (subId, title, count) ->
+            val selected = subId == selectedSubId
             FilterChip(
                 selected = selected,
-                onClick = { onSelectSubId(sub.id) },
+                onClick = { onSelectGroup(subId) },
                 label = {
                     Text(
-                        text = "${sub.name.ifBlank { "Group" }} ($count)",
+                        text = "$title ($count)",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         style = MaterialTheme.typography.labelMedium,
                     )
                 },

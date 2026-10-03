@@ -1,17 +1,15 @@
 package app.nebulabox.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -20,9 +18,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.nebulabox.config.ConfigBuilder
 import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
-import app.nebulabox.data.TunnelPhase
+import app.nebulabox.engine.TunnelState
 import app.nebulabox.ui.NebulaViewModel
 import app.nebulabox.ui.components.ConnectionDock
 import app.nebulabox.ui.components.EmptyServerState
@@ -35,6 +35,7 @@ import app.nebulabox.ui.dialogs.QrCodeDialog
 import app.nebulabox.ui.dialogs.ShareProfileDialog
 import app.nebulabox.ui.dialogs.SubscriptionsSheet
 import app.nebulabox.util.ClipboardHelper
+import app.nebulabox.util.ShareLinkParser
 
 @Composable
 fun ProfilesScreen(
@@ -44,142 +45,151 @@ fun ProfilesScreen(
     showSubscriptionsInit: Boolean = false,
     onSubscriptionsDismissed: () -> Unit = {},
 ) {
+    val profiles by viewModel.profiles.collectAsStateWithLifecycle()
+    val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val status by viewModel.status.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val testingProgress by viewModel.testingProgress.collectAsStateWithLifecycle()
+    val isUpdatingSubs by viewModel.updatingSubscriptions.collectAsStateWithLifecycle()
+    val activePingMs by viewModel.activePingMs.collectAsStateWithLifecycle()
+    val isTestingActive by viewModel.isTestingActive.collectAsStateWithLifecycle()
+    val exitIpInfo by viewModel.exitIpInfo.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val profiles by viewModel.profiles.collectAsState()
-    val subscriptions by viewModel.subscriptions.collectAsState()
-    val settings by viewModel.settings.collectAsState()
-    val phase by viewModel.phase.collectAsState()
-    val traffic by viewModel.traffic.collectAsState()
-    val testing by viewModel.testingAll.collectAsState()
-    val updatingSubs by viewModel.updatingSubs.collectAsState()
-    val activeDelayMs by viewModel.activeDelayMs.collectAsState()
-    val checkingLocation by viewModel.checkingLocation.collectAsState()
-    val exitIpInfo by viewModel.exitIpInfo.collectAsState()
 
-    var selectedSubId by rememberSaveable { mutableStateOf(settings.selectedSubscriptionId) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var showImportDialog by rememberSaveable { mutableStateOf(false) }
-    var showSubsDialog by rememberSaveable { mutableStateOf(false) }
-    var qrProfile by remember { mutableStateOf<Profile?>(null) }
-    var shareOptionsProfile by remember { mutableStateOf<Profile?>(null) }
-    var confirmClearAll by remember { mutableStateOf(false) }
-    var confirmRemoveInvalid by remember { mutableStateOf(false) }
-    var confirmRemoveDuplicates by remember { mutableStateOf(false) }
+    var showSubscriptionsDialog by rememberSaveable { mutableStateOf(false) }
+    var showDeleteAllConfirm by rememberSaveable { mutableStateOf(false) }
+    var showDeleteDupConfirm by rememberSaveable { mutableStateOf(false) }
+    var showDeleteInvalidConfirm by rememberSaveable { mutableStateOf(false) }
+    var qrDialogProfile by remember { mutableStateOf<Profile?>(null) }
+    var shareTarget by remember { mutableStateOf<Profile?>(null) }
 
     LaunchedEffect(showSubscriptionsInit) {
         if (showSubscriptionsInit) {
-            showSubsDialog = true
+            showSubscriptionsDialog = true
             onSubscriptionsDismissed()
         }
     }
 
-    val filtered = remember(profiles, selectedSubId, searchQuery) {
-        profiles.filter { p ->
-            val matchSub = selectedSubId.isEmpty() || p.subscriptionId == selectedSubId
-            val matchQuery = searchQuery.isBlank() ||
-                p.name.contains(searchQuery, ignoreCase = true) ||
-                p.server.contains(searchQuery, ignoreCase = true) ||
-                p.protocol.name.contains(searchQuery, ignoreCase = true)
-            matchSub && matchQuery
+    val selectedSubId = settings.selectedSubscriptionId
+
+    val filteredProfiles = remember(profiles, selectedSubId, searchQuery) {
+        val bySub = if (selectedSubId.isBlank()) {
+            profiles
+        } else {
+            profiles.filter { it.subscriptionId == selectedSubId }
         }
+        val q = searchQuery.trim().lowercase()
+        if (q.isEmpty()) {
+            bySub
+        } else {
+            bySub.filter { p ->
+                p.displayName.lowercase().contains(q) ||
+                    p.server.lowercase().contains(q) ||
+                    p.protocol.wire.lowercase().contains(q) ||
+                    p.remark.lowercase().contains(q)
+            }
+        }
+    }
+
+    val subBadgeMap = remember(subscriptions) {
+        subscriptions.associate { it.id to it.remarks }
     }
 
     val selectedProfile = remember(profiles, settings.selectedProfileId) {
         profiles.firstOrNull { it.id == settings.selectedProfileId } ?: profiles.firstOrNull()
     }
-    val subMap = remember(subscriptions) { subscriptions.associateBy { it.id } }
-    val isConnected = phase == TunnelPhase.Connected
-    val isConnectingOrStopping = phase == TunnelPhase.Starting || phase == TunnelPhase.Stopping
-    val listState = rememberLazyListState()
+
+    val importClipboardAction = {
+        val clip = ClipboardHelper.readText(context)
+        if (clip.isNullOrBlank()) {
+            Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+        } else {
+            viewModel.submitImportText(clip)
+        }
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         JavidTopBar(
-            isConnected = isConnected,
-            isLoading = testing || updatingSubs || isConnectingOrStopping || checkingLocation,
-            isTesting = testing,
+            isConnected = status.state == TunnelState.STARTED,
+            isLoading = isLoading,
+            isTesting = testingProgress != null,
             showSearch = showSearch,
             searchQuery = searchQuery,
             onSearchQueryChange = { searchQuery = it },
             onSearchClose = {
-                showSearch = false
                 searchQuery = ""
+                showSearch = false
             },
             onSearchToggle = { showSearch = it },
-            onOpenSubscriptions = { showSubsDialog = true },
-            onCancelTesting = { viewModel.cancelTesting() },
-            onImportClipboard = {
-                val clip = ClipboardHelper.readText(context)
-                if (!clip.isNullOrBlank()) {
-                    viewModel.submitImportText(clip, selectedSubId)
-                } else {
-                    showImportDialog = true
-                }
-            },
+            onOpenSubscriptions = { showSubscriptionsDialog = true },
+            onCancelTesting = { viewModel.cancelAllPing() },
+            onImportClipboard = importClipboardAction,
             onImportUrlOrText = { showImportDialog = true },
             onNewProtocol = onNewWithProtocol,
-            onRestartService = {
-                if (isConnected) {
-                    viewModel.disconnect()
-                    viewModel.connect()
+            onRestartService = { viewModel.restartTunnel() },
+            onPingAllTcp = { viewModel.testAllTcpPing() },
+            onPingAllReal = { viewModel.testAllRealPing() },
+            onSortByTestResults = { viewModel.sortByTestResults() },
+            onUpdateSubscriptions = {
+                if (subscriptions.isEmpty()) {
+                    showSubscriptionsDialog = true
                 } else {
-                    viewModel.connect()
+                    viewModel.updateAllSubscriptions()
                 }
             },
-            onPingAllTcp = { viewModel.testAllProfiles(selectedSubId) },
-            onPingAllReal = { viewModel.testAllProfilesReal(selectedSubId) },
-            onSortByTestResults = { viewModel.sortByDelay(selectedSubId) },
-            onUpdateSubscriptions = { viewModel.refreshAllSubscriptions() },
-            onDeleteDuplicates = { confirmRemoveDuplicates = true },
-            onDeleteInvalid = { confirmRemoveInvalid = true },
-            onDeleteAll = { confirmClearAll = true },
+            onDeleteDuplicates = { showDeleteDupConfirm = true },
+            onDeleteInvalid = { showDeleteInvalidConfirm = true },
+            onDeleteAll = { showDeleteAllConfirm = true },
             onExportAll = {
-                val text = viewModel.exportAllLinks(selectedSubId)
-                if (text.isNotBlank()) {
-                    ClipboardHelper.copyText(context, "JavidTun Export", text)
+                viewModel.exportAllShareLinks { text ->
+                    if (text.isBlank()) {
+                        Toast.makeText(context, "No shareable profiles", Toast.LENGTH_SHORT).show()
+                    } else {
+                        ClipboardHelper.copyText(context, "JavidTun Export", text)
+                    }
                 }
             },
         )
 
         ConnectionDock(
-            phase = phase,
-            selectedProfile = selectedProfile,
-            activeDelayMs = activeDelayMs,
-            checkingLocation = checkingLocation,
+            status = status,
+            activeProfileName = selectedProfile?.displayName,
+            activePingMs = activePingMs,
+            isTestingActive = isTestingActive,
+            testingProgress = testingProgress,
             exitIpInfo = exitIpInfo,
-            traffic = traffic,
-            onToggleConnection = { viewModel.toggleConnection() },
-            onVerifyConnection = { viewModel.verifyActiveConnection() },
+            onTestCurrentServer = { viewModel.testActiveConnectionDelay() },
+            onToggleService = {
+                if (selectedProfile != null) {
+                    viewModel.toggle(selectedProfile)
+                } else {
+                    viewModel.showSnack("Add or import a server first")
+                }
+            },
         )
 
         SubscriptionGroupBar(
             subscriptions = subscriptions,
             profiles = profiles,
             selectedSubId = selectedSubId,
-            onSelectSubId = { id ->
-                selectedSubId = id
-                viewModel.selectSubscription(id)
-            },
-            onPingAll = { viewModel.testAllProfilesReal(selectedSubId) },
-            onSortByPing = { viewModel.sortByDelay(selectedSubId) },
+            onSelectGroup = { viewModel.selectSubscriptionFilter(it) },
+            onPingAll = { viewModel.testAllRealPing() },
+            onSortByPing = { viewModel.sortByTestResults() },
         )
 
         Box(modifier = Modifier.weight(1f)) {
-            if (filtered.isEmpty()) {
+            if (filteredProfiles.isEmpty()) {
                 EmptyServerState(
-                    onPasteClipboard = {
-                        val clip = ClipboardHelper.readText(context)
-                        if (!clip.isNullOrBlank()) {
-                            viewModel.submitImportText(clip, selectedSubId)
-                        } else {
-                            showImportDialog = true
-                        }
-                    },
-                    onImportInput = { showImportDialog = true },
+                    hasAnyProfiles = profiles.isNotEmpty(),
+                    onImportClipboard = importClipboardAction,
+                    onOpenImportDialog = { showImportDialog = true },
                 )
             } else {
                 LazyColumn(
-                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         start = 16.dp,
@@ -189,18 +199,21 @@ fun ProfilesScreen(
                     ),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(filtered, key = { it.id }) { profile ->
-                        val selected = profile.id == selectedProfile?.id
-                        val subName = subMap[profile.subscriptionId]?.name
+                    items(filteredProfiles, key = { it.id }) { profile ->
+                        val isSelected = profile.id == selectedProfile?.id
                         ServerProfileCard(
                             profile = profile,
-                            selected = selected,
-                            subscriptionName = subName,
-                            onSelect = { viewModel.selectProfile(profile.id) },
+                            isSelected = isSelected,
+                            subscriptionBadge = if (selectedSubId.isBlank()) {
+                                subBadgeMap[profile.subscriptionId].orEmpty()
+                            } else {
+                                ""
+                            },
+                            onSelect = { viewModel.selectProfile(profile) },
+                            onShare = { shareTarget = profile },
                             onEdit = { onEdit(profile) },
-                            onShare = { shareOptionsProfile = profile },
                             onDelete = { viewModel.deleteProfile(profile.id) },
-                            onPing = { viewModel.testSingleProfileReal(profile) },
+                            onPingSingle = { viewModel.testSingleProfileRealPing(profile) },
                         )
                     }
                 }
@@ -208,89 +221,106 @@ fun ProfilesScreen(
         }
     }
 
+    shareTarget?.let { profile ->
+        ShareProfileDialog(
+            profile = profile,
+            onDismiss = { shareTarget = null },
+            onShowQrCode = {
+                shareTarget = null
+                qrDialogProfile = profile
+            },
+            onCopyUri = {
+                shareTarget = null
+                val uri = ShareLinkParser.toShareUri(profile)
+                if (uri.isBlank()) {
+                    Toast.makeText(context, "Cannot export URI for this profile", Toast.LENGTH_SHORT).show()
+                } else {
+                    ClipboardHelper.copyText(context, profile.displayName, uri)
+                }
+            },
+            onCopyFullConfig = {
+                shareTarget = null
+                val json = runCatching { ConfigBuilder.build(profile, settings.normalized()) }
+                    .getOrElse { profile.customConfig }
+                ClipboardHelper.copyText(context, "${profile.displayName} JSON", json)
+            },
+        )
+    }
+
+    qrDialogProfile?.let { profile ->
+        QrCodeDialog(
+            profile = profile,
+            uri = ShareLinkParser.toShareUri(profile),
+            onDismiss = { qrDialogProfile = null },
+        )
+    }
+
     if (showImportDialog) {
         ImportConfigDialog(
             onDismiss = { showImportDialog = false },
-            onImport = { text ->
-                viewModel.submitImportText(text, selectedSubId)
+            onSubmit = { text, asSubscription, subRemarks ->
                 showImportDialog = false
+                if (asSubscription && (text.startsWith("http://") || text.startsWith("https://"))) {
+                    viewModel.addOrUpdateSubscription(
+                        id = null,
+                        remarks = subRemarks.ifBlank { "Subscription" },
+                        url = text.trim(),
+                    )
+                } else {
+                    viewModel.submitImportText(text)
+                }
             },
         )
     }
 
-    if (showSubsDialog) {
+    if (showSubscriptionsDialog) {
         SubscriptionsSheet(
-            viewModel = viewModel,
-            onDismiss = { showSubsDialog = false },
-        )
-    }
-
-    shareOptionsProfile?.let { profile ->
-        ShareProfileDialog(
-            profile = profile,
-            onDismiss = { shareOptionsProfile = null },
-            onShowQr = {
-                shareOptionsProfile = null
-                qrProfile = profile
+            subscriptions = subscriptions,
+            isUpdating = isUpdatingSubs,
+            onDismiss = { showSubscriptionsDialog = false },
+            onAddSubscription = { remarks, url ->
+                viewModel.addOrUpdateSubscription(id = null, remarks = remarks, url = url)
             },
-            onCopyLink = {
-                ClipboardHelper.copyText(context, profile.name, profile.toShareUri())
-                shareOptionsProfile = null
-            },
-            onDuplicate = {
-                viewModel.duplicateProfile(profile)
-                shareOptionsProfile = null
+            onUpdateAll = { viewModel.updateAllSubscriptions() },
+            onDeleteSubscription = { id, _ ->
+                viewModel.deleteSubscription(id)
             },
         )
     }
 
-    qrProfile?.let { profile ->
-        QrCodeDialog(
-            profile = profile,
-            onDismiss = { qrProfile = null },
-            onCopyUri = {
-                ClipboardHelper.copyText(context, profile.name, profile.toShareUri())
-            },
-        )
-    }
-
-    if (confirmRemoveDuplicates) {
+    if (showDeleteDupConfirm) {
         ConfirmActionDialog(
-            title = "Remove duplicate configs",
-            message = "Remove profiles with identical server, port, protocol, and credentials?",
+            title = "Remove duplicate configs?",
+            message = "Remove configurations with identical protocol, address, port, credentials, and transport settings.",
+            onDismiss = { showDeleteDupConfirm = false },
             onConfirm = {
-                viewModel.removeDuplicates()
-                confirmRemoveDuplicates = false
+                showDeleteDupConfirm = false
+                viewModel.removeDuplicateProfiles()
             },
-            onDismiss = { confirmRemoveDuplicates = false },
         )
     }
 
-    if (confirmRemoveInvalid) {
+    if (showDeleteInvalidConfirm) {
         ConfirmActionDialog(
-            title = "Remove invalid configs",
-            message = "Delete all profiles that timed out (-1 ms) during latency testing?",
+            title = "Remove invalid configs?",
+            message = "Remove all configurations that failed (-1 ms) during the last test.",
+            onDismiss = { showDeleteInvalidConfirm = false },
             onConfirm = {
-                viewModel.removeInvalidProfiles(selectedSubId)
-                confirmRemoveInvalid = false
+                showDeleteInvalidConfirm = false
+                viewModel.removeInvalidProfiles()
             },
-            onDismiss = { confirmRemoveInvalid = false },
         )
     }
 
-    if (confirmClearAll) {
+    if (showDeleteAllConfirm) {
         ConfirmActionDialog(
-            title = "Remove all configs",
-            message = if (selectedSubId.isEmpty()) {
-                "Delete all server profiles?"
-            } else {
-                "Delete all profiles in the current subscription group?"
-            },
+            title = "Remove all configs?",
+            message = "Remove all configurations in the current group.",
+            onDismiss = { showDeleteAllConfirm = false },
             onConfirm = {
-                viewModel.clearProfilesInGroup(selectedSubId)
-                confirmClearAll = false
+                showDeleteAllConfirm = false
+                viewModel.deleteAllProfiles()
             },
-            onDismiss = { confirmClearAll = false },
         )
     }
 }
