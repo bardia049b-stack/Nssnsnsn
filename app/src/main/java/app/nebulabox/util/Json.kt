@@ -39,7 +39,7 @@ object Json {
         is Boolean -> value.toString()
         is Number -> value.toString()
         is String -> quote(value)
-        is Map<*, *> -> value.entries.joinToString(",", "{", "}") { (k, v) ->
+        is Map<*, *> -> value.entries.filter { it.value != null }.joinToString(",", "{", "}") { (k, v) ->
             quote(k.toString()) + ":" + any(v)
         }
         is Iterable<*> -> value.joinToString(",", "[", "]") { any(it) }

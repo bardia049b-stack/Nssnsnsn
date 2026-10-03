@@ -27,6 +27,14 @@ import java.net.InetAddress
  */
 object ConfigBuilder {
 
+    private fun mapObj(vararg pairs: Pair<String, Any?>): Map<String, Any?> {
+        val m = LinkedHashMap<String, Any?>()
+        for ((k, v) in pairs) {
+            if (v != null) m[k] = v
+        }
+        return m
+    }
+
     fun build(profile: Profile, settings: AppSettings): String {
         val s = settings.normalized()
         if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
@@ -57,28 +65,28 @@ object ConfigBuilder {
         )
 
         val proxyOutbound = buildOutbound(profile, settings, dnsHosts)
-        val directOutbound = Json.obj(
+        val directOutbound = mapObj(
             "tag" to "direct",
             "protocol" to "freedom",
             "settings" to emptyMap<String, Any?>(),
-            "streamSettings" to Json.obj(
-                "sockopt" to Json.obj(
+            "streamSettings" to mapObj(
+                "sockopt" to mapObj(
                     "domainStrategy" to "UseIP",
-                    "happyEyeballs" to Json.obj(
+                    "happyEyeballs" to mapObj(
                         "tryDelayMs" to 250,
                         "interleave" to 2,
                     ),
                 ),
             ),
         )
-        val blockOutbound = Json.obj(
+        val blockOutbound = mapObj(
             "tag" to "block",
             "protocol" to "blackhole",
-            "settings" to Json.obj(
-                "response" to Json.obj("type" to "http"),
+            "settings" to mapObj(
+                "response" to mapObj("type" to "http"),
             ),
         )
-        val dnsOutbound = Json.obj(
+        val dnsOutbound = mapObj(
             "tag" to "dns-out",
             "protocol" to "dns",
         )
@@ -91,22 +99,22 @@ object ConfigBuilder {
 
         val root = linkedMapOf<String, Any?>()
         root["remarks"] = profile.displayName
-        root["log"] = Json.obj(
+        root["log"] = mapObj(
             "loglevel" to if (forSpeedtest) "error" else settings.logLevel,
         )
 
         if (!forSpeedtest) {
             root["stats"] = emptyMap<String, Any?>()
-            root["policy"] = Json.obj(
-                "levels" to Json.obj(
-                    "8" to Json.obj(
+            root["policy"] = mapObj(
+                "levels" to mapObj(
+                    "8" to mapObj(
                         "handshake" to 4,
                         "connIdle" to 300,
                         "uplinkOnly" to 1,
                         "downlinkOnly" to 1,
                     ),
                 ),
-                "system" to Json.obj(
+                "system" to mapObj(
                     "statsOutboundUplink" to true,
                     "statsOutboundDownlink" to true,
                 ),
@@ -114,7 +122,7 @@ object ConfigBuilder {
             root["inbounds"] = buildInbounds(settings)
             if (settings.fakeDns) {
                 root["fakedns"] = listOf(
-                    Json.obj(
+                    mapObj(
                         "ipPool" to "198.18.0.0/15",
                         "poolSize" to 10000,
                     ),
@@ -149,7 +157,7 @@ object ConfigBuilder {
             }
         }
 
-        val sniffingObj = Json.obj(
+        val sniffingObj = mapObj(
             "enabled" to sniffingEnabled,
             "destOverride" to destOverride.ifEmpty { listOf("http", "tls", "quic") },
             "routeOnly" to settings.routeOnly,
@@ -157,12 +165,12 @@ object ConfigBuilder {
 
         // 1. Local SOCKS5 + HTTP proxy inbound (v2rayNG default port 10808)
         list.add(
-            Json.obj(
+            mapObj(
                 "tag" to "socks",
                 "port" to settings.socksPort,
                 "listen" to if (settings.allowLan) "0.0.0.0" else "127.0.0.1",
                 "protocol" to "socks",
-                "settings" to Json.obj(
+                "settings" to mapObj(
                     "auth" to "noauth",
                     "udp" to true,
                     "userLevel" to 8,
@@ -174,11 +182,11 @@ object ConfigBuilder {
         // 2. Native Xray TUN inbound (used when useHevTun == false)
         if (!settings.useHevTun) {
             list.add(
-                Json.obj(
+                mapObj(
                     "tag" to "tun",
                     "port" to 0,
                     "protocol" to "tun",
-                    "settings" to Json.obj(
+                    "settings" to mapObj(
                         "name" to "xray0",
                         "MTU" to settings.mtu,
                         "userLevel" to 8,
@@ -208,7 +216,7 @@ object ConfigBuilder {
         val direct = settings.directDns.trim().ifBlank { "8.8.8.8" }
         if (settings.routeMode == "white_iran") {
             servers.add(
-                Json.obj(
+                mapObj(
                     "address" to direct,
                     "domains" to listOf("geosite:ir", "regexp:.*\\.ir$"),
                     "skipFallback" to true,
@@ -217,7 +225,7 @@ object ConfigBuilder {
             )
         } else if (settings.bypassChina) {
             servers.add(
-                Json.obj(
+                mapObj(
                     "address" to direct,
                     "domains" to listOf("geosite:cn"),
                     "skipFallback" to true,
@@ -234,7 +242,7 @@ object ConfigBuilder {
             else -> "UseIP"
         }
 
-        return Json.obj(
+        return mapObj(
             "hosts" to dnsHosts,
             "servers" to servers,
             "queryStrategy" to queryStrategy,
@@ -254,7 +262,7 @@ object ConfigBuilder {
             // Route UDP port 53 DNS packets through Xray's internal dns-out handler
             // so DNS resolves reliably over TCP/DoH even when the proxy server is TCP-only (e.g. Cloudflare Workers)
             rules.add(
-                Json.obj(
+                mapObj(
                     "type" to "field",
                     "port" to "53",
                     "network" to "udp",
@@ -265,14 +273,14 @@ object ConfigBuilder {
 
         // Route Xray's remote DNS module through proxy, domestic DNS through direct
         rules.add(
-            Json.obj(
+            mapObj(
                 "type" to "field",
                 "inboundTag" to listOf("dns-module"),
                 "outboundTag" to "proxy",
             ),
         )
         rules.add(
-            Json.obj(
+            mapObj(
                 "type" to "field",
                 "inboundTag" to listOf("domestic-dns"),
                 "outboundTag" to "direct",
@@ -281,7 +289,7 @@ object ConfigBuilder {
 
         if (settings.blockAds) {
             rules.add(
-                Json.obj(
+                mapObj(
                     "type" to "field",
                     "domain" to listOf("geosite:category-ads-all"),
                     "outboundTag" to "block",
@@ -291,14 +299,14 @@ object ConfigBuilder {
 
         if (settings.bypassLan) {
             rules.add(
-                Json.obj(
+                mapObj(
                     "type" to "field",
                     "ip" to listOf("geoip:private"),
                     "outboundTag" to "direct",
                 ),
             )
             rules.add(
-                Json.obj(
+                mapObj(
                     "type" to "field",
                     "domain" to listOf("geosite:private"),
                     "outboundTag" to "direct",
@@ -310,14 +318,14 @@ object ConfigBuilder {
             "white_iran" -> {
                 // v2rayNG custom_routing_white_iran preset
                 rules.add(
-                    Json.obj(
+                    mapObj(
                         "type" to "field",
                         "ip" to listOf("geoip:ir"),
                         "outboundTag" to "direct",
                     ),
                 )
                 rules.add(
-                    Json.obj(
+                    mapObj(
                         "type" to "field",
                         "domain" to listOf(
                             "geosite:ir",
@@ -332,14 +340,14 @@ object ConfigBuilder {
             "rule" -> {
                 if (settings.bypassChina) {
                     rules.add(
-                        Json.obj(
+                        mapObj(
                             "type" to "field",
                             "ip" to listOf("geoip:cn"),
                             "outboundTag" to "direct",
                         ),
                     )
                     rules.add(
-                        Json.obj(
+                        mapObj(
                             "type" to "field",
                             "domain" to listOf("geosite:cn"),
                             "outboundTag" to "direct",
@@ -350,7 +358,7 @@ object ConfigBuilder {
 
             "direct" -> {
                 rules.add(
-                    Json.obj(
+                    mapObj(
                         "type" to "field",
                         "network" to "tcp,udp",
                         "outboundTag" to "direct",
@@ -361,14 +369,14 @@ object ConfigBuilder {
 
         // Catch-all rule -> proxy (matches v2rayNG default catch-all)
         rules.add(
-            Json.obj(
+            mapObj(
                 "type" to "field",
                 "network" to "tcp,udp",
                 "outboundTag" to "proxy",
             ),
         )
 
-        return Json.obj(
+        return mapObj(
             "domainStrategy" to settings.domainStrategy.ifBlank { "AsIs" },
             "rules" to rules,
         )
@@ -382,7 +390,7 @@ object ConfigBuilder {
         dnsHosts: MutableMap<String, Any?>,
     ): Map<String, Any?> {
         if (p.protocol == Protocol.DIRECT) {
-            return Json.obj("tag" to "proxy", "protocol" to "freedom")
+            return mapObj("tag" to "proxy", "protocol" to "freedom")
         }
 
         // Pre-resolve server domain to IP(s) via Android system DNS (matching v2rayNG resolveOutboundDomainsToHosts)
@@ -394,7 +402,7 @@ object ConfigBuilder {
             if (resolvedIps.isNotEmpty()) {
                 dnsHosts[serverHost] = if (resolvedIps.size == 1) resolvedIps.first() else resolvedIps
                 resolvedStrategy = "UseIP"
-                happyEyeballs = Json.obj(
+                happyEyeballs = mapObj(
                     "tryDelayMs" to 250,
                     "interleave" to 2,
                     "prioritizeIPv6" to settings.preferIpv6,
@@ -417,7 +425,7 @@ object ConfigBuilder {
         }
 
         val outSettings: Map<String, Any?> = when (p.protocol) {
-            Protocol.VLESS -> Json.obj(
+            Protocol.VLESS -> mapObj(
                 "address" to serverHost,
                 "port" to p.serverPort,
                 "id" to p.uuid.trim(),
@@ -426,7 +434,7 @@ object ConfigBuilder {
                 "level" to 8,
             )
 
-            Protocol.VMESS -> Json.obj(
+            Protocol.VMESS -> mapObj(
                 "address" to serverHost,
                 "port" to p.serverPort,
                 "id" to p.uuid.trim(),
@@ -434,7 +442,7 @@ object ConfigBuilder {
                 "level" to 8,
             )
 
-            Protocol.TROJAN -> Json.obj(
+            Protocol.TROJAN -> mapObj(
                 "address" to serverHost,
                 "port" to p.serverPort,
                 "password" to p.password,
@@ -442,7 +450,7 @@ object ConfigBuilder {
                 "level" to 8,
             )
 
-            Protocol.SHADOWSOCKS -> Json.obj(
+            Protocol.SHADOWSOCKS -> mapObj(
                 "address" to serverHost,
                 "port" to p.serverPort,
                 "password" to p.password,
@@ -450,7 +458,7 @@ object ConfigBuilder {
                 "level" to 8,
             )
 
-            Protocol.SOCKS, Protocol.HTTP -> Json.obj(
+            Protocol.SOCKS, Protocol.HTTP -> mapObj(
                 "address" to serverHost,
                 "port" to p.serverPort,
                 "user" to p.username.takeIf { it.isNotBlank() },
@@ -458,7 +466,7 @@ object ConfigBuilder {
                 "level" to 8,
             )
 
-            Protocol.HYSTERIA2, Protocol.TUIC -> Json.obj(
+            Protocol.HYSTERIA2, Protocol.TUIC -> mapObj(
                 "address" to serverHost,
                 "port" to p.serverPort,
                 "version" to 2,
@@ -468,11 +476,11 @@ object ConfigBuilder {
                 val addrs = p.localAddresses.ifEmpty { listOf("172.16.0.2/32") }
                     .let { list -> if (settings.ipv6) list else list.filter { !it.contains(":") }.ifEmpty { listOf("172.16.0.2/32") } }
                 val endpointHost = if (serverHost.contains(":") && !serverHost.startsWith("[")) "[$serverHost]" else serverHost
-                Json.obj(
+                mapObj(
                     "secretKey" to p.privateKey,
                     "address" to addrs,
                     "peers" to listOf(
-                        Json.obj(
+                        mapObj(
                             "publicKey" to p.peerPublicKey,
                             "preSharedKey" to p.preSharedKey.takeIf { it.isNotBlank() },
                             "endpoint" to "$endpointHost:${p.serverPort}",
@@ -488,8 +496,8 @@ object ConfigBuilder {
 
         val streamSettings = if (p.protocol == Protocol.WIREGUARD) {
             if (resolvedStrategy != null) {
-                Json.obj(
-                    "sockopt" to Json.obj(
+                mapObj(
+                    "sockopt" to mapObj(
                         "domainStrategy" to resolvedStrategy,
                         "happyEyeballs" to happyEyeballs,
                     ),
@@ -507,20 +515,20 @@ object ConfigBuilder {
             p.transport.type.lowercase() != "xhttp"
         val muxObj = if (allowMux) {
             val concurrency = if (p.protocol == Protocol.VLESS && p.flow.isNotBlank()) -1 else settings.muxConcurrency
-            Json.obj(
+            mapObj(
                 "enabled" to true,
                 "concurrency" to concurrency,
                 "xudpConcurrency" to settings.muxXudpConcurrency,
                 "xudpProxyUDP443" to settings.muxXudpQuic,
             )
         } else {
-            Json.obj(
+            mapObj(
                 "enabled" to false,
                 "concurrency" to -1,
             )
         }
 
-        return Json.obj(
+        return mapObj(
             "tag" to "proxy",
             "protocol" to protocolName,
             "settings" to outSettings,
@@ -557,14 +565,14 @@ object ConfigBuilder {
                     val hosts = p.transport.host.split(",").map { it.trim() }.filter { it.isNotEmpty() }
                     val paths = p.transport.path.split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("/") }
                     transportSni = hosts.firstOrNull().orEmpty()
-                    stream["tcpSettings"] = Json.obj(
-                        "header" to Json.obj(
+                    stream["tcpSettings"] = mapObj(
+                        "header" to mapObj(
                             "type" to "http",
-                            "request" to Json.obj(
+                            "request" to mapObj(
                                 "version" to "1.1",
                                 "method" to "GET",
                                 "path" to paths,
-                                "headers" to Json.obj(
+                                "headers" to mapObj(
                                     "Host" to hosts.takeIf { it.isNotEmpty() },
                                     "User-Agent" to listOf("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36"),
                                     "Accept-Encoding" to listOf("gzip, deflate"),
@@ -576,8 +584,8 @@ object ConfigBuilder {
                     )
                 } else {
                     transportSni = p.transport.host
-                    stream["tcpSettings"] = Json.obj(
-                        "header" to Json.obj("type" to "none"),
+                    stream["tcpSettings"] = mapObj(
+                        "header" to mapObj("type" to "none"),
                     )
                 }
             }
@@ -588,7 +596,7 @@ object ConfigBuilder {
                 val wsHost = p.transport.host
                 val wsPath = ShareLinkParser.buildWsPathWithEd(p.transport)
                 transportSni = wsHost
-                stream["wsSettings"] = Json.obj(
+                stream["wsSettings"] = mapObj(
                     "host" to wsHost,
                     "path" to wsPath,
                     "headers" to p.transport.headers.takeIf { it.isNotEmpty() },
@@ -599,7 +607,7 @@ object ConfigBuilder {
                 val huHost = p.transport.host
                 val huPath = ShareLinkParser.buildWsPathWithEd(p.transport)
                 transportSni = huHost
-                stream["httpupgradeSettings"] = Json.obj(
+                stream["httpupgradeSettings"] = mapObj(
                     "host" to huHost,
                     "path" to huPath,
                 )
@@ -612,7 +620,7 @@ object ConfigBuilder {
                 val extraParsed = if (p.transport.xhttpExtra.isNotBlank()) {
                     runCatching { Json.parse(p.transport.xhttpExtra) }.getOrNull()
                 } else null
-                stream["xhttpSettings"] = Json.obj(
+                stream["xhttpSettings"] = mapObj(
                     "host" to xHost,
                     "path" to xPath,
                     "mode" to p.transport.xhttpMode.ifBlank { "auto" },
@@ -622,7 +630,7 @@ object ConfigBuilder {
 
             "grpc" -> {
                 transportSni = p.transport.authority.ifBlank { p.transport.host }
-                stream["grpcSettings"] = Json.obj(
+                stream["grpcSettings"] = mapObj(
                     "serviceName" to p.transport.serviceName.ifBlank { p.transport.path },
                     "authority" to p.transport.authority.takeIf { it.isNotBlank() },
                     "multiMode" to (p.transport.grpcMode == "multi"),
@@ -632,7 +640,7 @@ object ConfigBuilder {
             }
 
             "kcp" -> {
-                stream["kcpSettings"] = Json.obj(
+                stream["kcpSettings"] = mapObj(
                     "mtu" to 1350,
                     "tti" to 50,
                     "uplinkCapacity" to 12,
@@ -644,7 +652,7 @@ object ConfigBuilder {
             }
 
             "hysteria" -> {
-                stream["hysteriaSettings"] = Json.obj(
+                stream["hysteriaSettings"] = mapObj(
                     "version" to 2,
                     "auth" to p.password,
                 )
@@ -653,7 +661,7 @@ object ConfigBuilder {
                 if (p.downMbps > 0) quicParams["brutalDown"] = "${p.downMbps} mbps"
                 if (quicParams.isNotEmpty()) quicParams["congestion"] = "brutal"
                 if (p.portHopping.isNotBlank()) {
-                    quicParams["udpHop"] = Json.obj(
+                    quicParams["udpHop"] = mapObj(
                         "ports" to p.portHopping,
                         "interval" to p.portHoppingInterval.ifBlank { "30" },
                     )
@@ -662,9 +670,9 @@ object ConfigBuilder {
                 if (quicParams.isNotEmpty()) finalMask["quicParams"] = quicParams
                 if (p.obfsPassword.isNotBlank()) {
                     finalMask["udp"] = listOf(
-                        Json.obj(
+                        mapObj(
                             "type" to "salamander",
-                            "settings" to Json.obj("password" to p.obfsPassword),
+                            "settings" to mapObj("password" to p.obfsPassword),
                         ),
                     )
                 }
@@ -680,7 +688,7 @@ object ConfigBuilder {
         if (isReality) {
             stream["security"] = "reality"
             val sni = p.tls.serverName.ifBlank { transportSni.ifBlank { p.server } }
-            stream["realitySettings"] = Json.obj(
+            stream["realitySettings"] = mapObj(
                 "serverName" to sni,
                 "fingerprint" to p.tls.utlsFingerprint.ifBlank { "chrome" },
                 "publicKey" to p.tls.realityPublicKey,
@@ -701,7 +709,7 @@ object ConfigBuilder {
             } else {
                 p.tls.alpn.takeIf { it.isNotEmpty() }
             }
-            stream["tlsSettings"] = Json.obj(
+            stream["tlsSettings"] = mapObj(
                 "allowInsecure" to (p.tls.insecure && p.tls.pinnedCA256.isBlank()),
                 "serverName" to sni.takeIf { it.isNotBlank() },
                 "fingerprint" to p.tls.utlsFingerprint.takeIf { it.isNotBlank() },
@@ -718,11 +726,11 @@ object ConfigBuilder {
             } else {
                 settings.fragmentPackets.ifBlank { "tlshello" }
             }
-            stream["finalmask"] = Json.obj(
+            stream["finalmask"] = mapObj(
                 "tcp" to listOf(
-                    Json.obj(
+                    mapObj(
                         "type" to "fragment",
-                        "settings" to Json.obj(
+                        "settings" to mapObj(
                             "packets" to packets,
                             "length" to settings.fragmentLength.ifBlank { "50-100" },
                             "delay" to settings.fragmentInterval.ifBlank { "10-20" },
@@ -731,11 +739,11 @@ object ConfigBuilder {
                     ),
                 ),
                 "udp" to listOf(
-                    Json.obj(
+                    mapObj(
                         "type" to "noise",
-                        "settings" to Json.obj(
+                        "settings" to mapObj(
                             "noise" to listOf(
-                                Json.obj(
+                                mapObj(
                                     "rand" to "10-20",
                                     "delay" to "10-16",
                                 ),
@@ -784,16 +792,16 @@ object ConfigBuilder {
             } else {
                 mutable["inbounds"] = buildInbounds(settings)
                 mutable["stats"] = emptyMap<String, Any?>()
-                mutable["policy"] = Json.obj(
-                    "levels" to Json.obj(
-                        "8" to Json.obj(
+                mutable["policy"] = mapObj(
+                    "levels" to mapObj(
+                        "8" to mapObj(
                             "handshake" to 4,
                             "connIdle" to 300,
                             "uplinkOnly" to 1,
                             "downlinkOnly" to 1,
                         ),
                     ),
-                    "system" to Json.obj(
+                    "system" to mapObj(
                         "statsOutboundUplink" to true,
                         "statsOutboundDownlink" to true,
                     ),
@@ -807,13 +815,13 @@ object ConfigBuilder {
             val outboundMap = LinkedHashMap(parsed)
             outboundMap["tag"] = "proxy"
             val root = linkedMapOf<String, Any?>(
-                "log" to Json.obj("loglevel" to settings.logLevel),
+                "log" to mapObj("loglevel" to settings.logLevel),
                 "dns" to buildDns(settings, emptyMap()),
                 "outbounds" to listOf(
                     outboundMap,
-                    Json.obj("tag" to "direct", "protocol" to "freedom"),
-                    Json.obj("tag" to "block", "protocol" to "blackhole"),
-                    Json.obj("tag" to "dns-out", "protocol" to "dns"),
+                    mapObj("tag" to "direct", "protocol" to "freedom"),
+                    mapObj("tag" to "block", "protocol" to "blackhole"),
+                    mapObj("tag" to "dns-out", "protocol" to "dns"),
                 ),
                 "routing" to buildRouting(settings, forSpeedtest),
             )
