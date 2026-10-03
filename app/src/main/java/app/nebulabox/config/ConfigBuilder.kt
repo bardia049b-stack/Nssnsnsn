@@ -110,7 +110,7 @@ object ConfigBuilder {
                     protocol = "tun",
                     settings = V2rayConfig.InboundBean.InSettingsBean(
                         name = "xray0",
-                        MTU = settings.mtu,
+                        mtu = settings.mtu,
                         userLevel = 8,
                     ),
                     sniffing = V2rayConfig.InboundBean.SniffingBean(
@@ -152,9 +152,7 @@ object ConfigBuilder {
         val blockOutbound = V2rayConfig.OutboundBean(
             tag = AppConfig.TAG_BLOCKED,
             protocol = "blackhole",
-            settings = OutSettingsBean(
-                response = OutSettingsBean.Response(type = "http"),
-            ),
+            settings = OutSettingsBean(),
             streamSettings = null,
             mux = null,
         )

@@ -413,8 +413,10 @@ fun ProfileEditSheet(
                         singleLine = true,
                     )
                     OutlinedTextField(
-                        value = profile.echConfigList,
-                        onValueChange = { profile = profile.copy(echConfigList = it) },
+                        value = profile.tls.echConfigList,
+                        onValueChange = {
+                            profile = profile.copy(tls = profile.tls.copy(echConfigList = it))
+                        },
                         label = { Text("ECH Config List (ech)") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
