@@ -158,7 +158,7 @@ fun RootScreen(
                                 color = MaterialTheme.colorScheme.onSurface,
                             )
                             Text(
-                                text = viewModel.engineName,
+                                text = viewModel.activeEngine?.implementationName ?: "Xray-core",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

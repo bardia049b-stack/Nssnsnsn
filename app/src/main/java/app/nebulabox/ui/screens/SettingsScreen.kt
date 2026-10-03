@@ -317,7 +317,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
         )
         if (uiExpanded) {
             SettingsListItem(
-                title = stringResource(R.string.settings_language),
+                title = stringResource(R.string.settings_group_appearance),
                 options = listOf(
                     "system" to stringResource(R.string.lang_system),
                     "en" to stringResource(R.string.lang_english),
@@ -326,11 +326,11 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 selectedValue = s.language,
                 onSelected = { tag ->
                     viewModel.updateSettings { it.copy(language = tag) }
-                    LocaleManager.setLocale(context, tag)
+                    LocaleManager.storeLanguage(context, tag)
                 },
             )
             SettingsListItem(
-                title = stringResource(R.string.settings_theme),
+                title = "Theme",
                 options = listOf(
                     "system" to stringResource(R.string.theme_system),
                     "light" to stringResource(R.string.theme_light),
@@ -368,7 +368,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                text = viewModel.engineName,
+                text = viewModel.activeEngine?.implementationName ?: "Xray-core",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -579,7 +579,7 @@ private fun SettingsEditItem(
                         onValueChanged(text.trim())
                     },
                 ) {
-                    Text(stringResource(R.string.action_ok))
+                    Text(stringResource(R.string.action_save))
                 }
             },
             dismissButton = {

@@ -102,6 +102,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.nebulabox.R
+import app.nebulabox.config.ConfigBuilder
 import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
 import app.nebulabox.data.SubscriptionItem
@@ -116,6 +117,8 @@ import app.nebulabox.ui.colorFabInactiveLight
 import app.nebulabox.ui.colorPing
 import app.nebulabox.ui.colorPingRed
 import app.nebulabox.util.Formatters
+import app.nebulabox.util.IpLocationChecker
+import app.nebulabox.util.ShareLinkParser
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
@@ -144,11 +147,13 @@ fun ProfilesScreen(
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
-    val isPinging by viewModel.isPinging.collectAsStateWithLifecycle()
-    val isUpdatingSubs by viewModel.isUpdatingSubs.collectAsStateWithLifecycle()
-    val isTestingActive by viewModel.isTestingActiveDelay.collectAsStateWithLifecycle()
-    val activePingMs by viewModel.activeConnectionPingMs.collectAsStateWithLifecycle()
-    val exitIpInfo by viewModel.exitIpInfo.collectAsStateWithLifecycle()
+    val testingProgress by viewModel.testingProgress.collectAsStateWithLifecycle()
+    val testingProfileIds by viewModel.testingProfileIds.collectAsStateWithLifecycle()
+    val isUpdatingSubs by viewModel.updatingSubscriptions.collectAsStateWithLifecycle()
+    val isTestingActive by viewModel.checkingLocation.collectAsStateWithLifecycle()
+    val activePingMs by viewModel.activeDelayMs.collectAsStateWithLifecycle()
+    val exitIpInfo by viewModel.endpointLocation.collectAsStateWithLifecycle()
+    val isPinging = testingProgress != null || testingProfileIds.isNotEmpty()
 
     val context = LocalContext.current
     val isDarkTheme = LocalDarkTheme.current
@@ -212,20 +217,16 @@ fun ProfilesScreen(
                     if (clip.isNullOrBlank()) {
                         Toast.makeText(context, R.string.clipboard_empty, Toast.LENGTH_SHORT).show()
                     } else {
-                        viewModel.importFromText(clip)
+                        viewModel.submitImportText(clip)
                     }
                 },
                 onImportUrlOrText = { showImportDialog = true },
                 onNewProtocol = onNewWithProtocol,
                 onRestartService = {
-                    if (status.state == TunnelState.STARTED) {
-                        viewModel.selectProfile(settings.selectedProfileId ?: profiles.firstOrNull()?.id.orEmpty())
-                    } else {
-                        viewModel.toggleTunnel()
-                    }
+                    viewModel.restartTunnel()
                 },
-                onPingAllTcp = { viewModel.pingAll(realPing = false) },
-                onPingAllReal = { viewModel.pingAll(realPing = true) },
+                onPingAllTcp = { viewModel.testAllTcpPing() },
+                onPingAllReal = { viewModel.testAllRealPing() },
                 onSortByTestResults = { viewModel.sortByTestResults() },
                 onUpdateSubscriptions = {
                     if (subscriptions.isEmpty()) {
@@ -238,7 +239,7 @@ fun ProfilesScreen(
                 onDeleteInvalid = { showDeleteInvalidConfirm = true },
                 onDeleteAll = { showDeleteAllConfirm = true },
                 onExportAll = {
-                    viewModel.exportAllToClipboard { text ->
+                    viewModel.exportAllShareLinks { text ->
                         if (text.isBlank()) {
                             Toast.makeText(context, "No shareable profiles", Toast.LENGTH_SHORT).show()
                         } else {
@@ -251,12 +252,20 @@ fun ProfilesScreen(
         bottomBar = {
             MainBottomBar(
                 status = status,
-                activePingMs = activePingMs,
+                activePingMs = activePingMs ?: -1L,
                 isTestingActive = isTestingActive,
                 exitIpInfo = exitIpInfo,
                 isDarkTheme = isDarkTheme,
                 onTestCurrentServer = { viewModel.testActiveConnectionDelay() },
-                onToggleService = { viewModel.toggleTunnel() },
+                onToggleService = {
+                    val target = profiles.firstOrNull { it.id == settings.selectedProfileId }
+                        ?: profiles.firstOrNull()
+                    if (target != null) {
+                        viewModel.toggle(target)
+                    } else {
+                        viewModel.showSnack("Add or import a server first")
+                    }
+                },
             )
         },
     ) { innerPadding ->
@@ -296,7 +305,7 @@ fun ProfilesScreen(
                     allTabs.forEachIndexed { index, (subId, title, _) ->
                         Tab(
                             selected = index == selectedTabIndex,
-                            onClick = { viewModel.selectSubscriptionGroup(subId) },
+                            onClick = { viewModel.selectSubscriptionFilter(subId) },
                             modifier = Modifier
                                 .widthIn(min = 56.dp)
                                 .heightIn(min = 46.dp),
@@ -340,7 +349,7 @@ fun ProfilesScreen(
                                     if (clip.isNullOrBlank()) {
                                         showImportDialog = true
                                     } else {
-                                        viewModel.importFromText(clip)
+                                        viewModel.submitImportText(clip)
                                     }
                                 },
                             ) {
@@ -361,11 +370,11 @@ fun ProfilesScreen(
                             profile = profile,
                             isSelected = isSelected,
                             subscriptionBadge = subBadgeMap[profile.subscriptionId].orEmpty(),
-                            onSelect = { viewModel.selectProfile(profile.id) },
+                            onSelect = { viewModel.selectProfile(profile) },
                             onShare = { shareTarget = profile },
                             onEdit = { onEdit(profile) },
                             onDelete = { viewModel.deleteProfile(profile.id) },
-                            onPingSingle = { viewModel.pingSingle(profile, realPing = true) },
+                            onPingSingle = { viewModel.testSingleProfileRealPing(profile) },
                         )
                         AppDivider(modifier = Modifier.padding(horizontal = 12.dp))
                     }
@@ -385,7 +394,7 @@ fun ProfilesScreen(
             },
             onCopyUri = {
                 shareTarget = null
-                val uri = viewModel.shareProfileUri(profile)
+                val uri = ShareLinkParser.toShareUri(profile)
                 if (uri.isBlank()) {
                     Toast.makeText(context, "Cannot export URI for this profile", Toast.LENGTH_SHORT).show()
                 } else {
@@ -394,7 +403,8 @@ fun ProfilesScreen(
             },
             onCopyFullConfig = {
                 shareTarget = null
-                val json = viewModel.exportProfileFullJson(profile)
+                val json = runCatching { ConfigBuilder.build(profile, settings.normalized()) }
+                    .getOrElse { profile.rawConfigJson }
                 copyToClipboard(context, "${profile.displayName} JSON", json)
             },
         )
@@ -403,7 +413,7 @@ fun ProfilesScreen(
     qrDialogProfile?.let { profile ->
         QRCodeDialog(
             profile = profile,
-            uri = viewModel.shareProfileUri(profile),
+            uri = ShareLinkParser.toShareUri(profile),
             onDismiss = { qrDialogProfile = null },
         )
     }
@@ -415,11 +425,12 @@ fun ProfilesScreen(
                 showImportDialog = false
                 if (asSubscription && (text.startsWith("http://") || text.startsWith("https://"))) {
                     viewModel.addOrUpdateSubscription(
+                        id = null,
                         remarks = subRemarks.ifBlank { "Subscription" },
                         url = text.trim(),
                     )
                 } else {
-                    viewModel.importFromText(text)
+                    viewModel.submitImportText(text)
                 }
             },
         )
@@ -431,11 +442,11 @@ fun ProfilesScreen(
             isUpdating = isUpdatingSubs,
             onDismiss = { showSubscriptionsDialog = false },
             onAddSubscription = { remarks, url ->
-                viewModel.addOrUpdateSubscription(remarks, url)
+                viewModel.addOrUpdateSubscription(id = null, remarks = remarks, url = url)
             },
             onUpdateAll = { viewModel.updateAllSubscriptions() },
-            onDeleteSubscription = { id, deleteProfiles ->
-                viewModel.deleteSubscription(id, deleteProfiles)
+            onDeleteSubscription = { id, _ ->
+                viewModel.deleteSubscription(id)
             },
         )
     }
@@ -447,7 +458,7 @@ fun ProfilesScreen(
             onDismiss = { showDeleteDupConfirm = false },
             onConfirm = {
                 showDeleteDupConfirm = false
-                viewModel.removeDuplicates()
+                viewModel.removeDuplicateProfiles()
             },
         )
     }
@@ -471,7 +482,7 @@ fun ProfilesScreen(
             onDismiss = { showDeleteAllConfirm = false },
             onConfirm = {
                 showDeleteAllConfirm = false
-                viewModel.clearAllProfiles(selectedSubId.takeIf { it.isNotBlank() })
+                viewModel.deleteAllProfiles()
             },
         )
     }
@@ -887,7 +898,7 @@ private fun MainBottomBar(
     status: app.nebulabox.engine.TunnelStatus,
     activePingMs: Long,
     isTestingActive: Boolean,
-    exitIpInfo: NebulaViewModel.ExitIpInfo,
+    exitIpInfo: IpLocationChecker.EndpointLocation?,
     isDarkTheme: Boolean,
     onTestCurrentServer: () -> Unit,
     onToggleService: () -> Unit,
@@ -907,7 +918,6 @@ private fun MainBottomBar(
         TunnelState.STARTED -> when {
             isTestingActive -> "Testing connection..."
             activePingMs > 0L -> "Connected: test delay ${activePingMs} ms"
-            activePingMs == -2L -> "Connected: test timeout (tap to retry)"
             else -> "Connected, tap to check connection"
         }
         TunnelState.STARTING -> "Starting service..."
@@ -917,8 +927,8 @@ private fun MainBottomBar(
 
     val secondaryText = if (isRunning) {
         val speedPart = "↑ ${Formatters.speed(status.uplink)}   ↓ ${Formatters.speed(status.downlink)}"
-        val ipPart = if (exitIpInfo.ip.isNotBlank()) {
-            "  •  ${exitIpInfo.flag} ${exitIpInfo.ip} ${exitIpInfo.country}".trimEnd()
+        val ipPart = if (exitIpInfo != null && exitIpInfo.ip.isNotBlank()) {
+            "  •  ${exitIpInfo.flagEmoji} ${exitIpInfo.ip} ${exitIpInfo.countryName}".trimEnd()
         } else {
             ""
         }
@@ -1273,7 +1283,7 @@ private fun ConfirmDialog(
         text = { Text(message) },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text(stringResource(R.string.action_ok), color = MaterialTheme.colorScheme.error)
+                Text(stringResource(R.string.action_delete), color = MaterialTheme.colorScheme.error)
             }
         },
         dismissButton = {
