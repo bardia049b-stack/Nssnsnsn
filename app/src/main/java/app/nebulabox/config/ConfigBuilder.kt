@@ -1,593 +1,843 @@
 package app.nebulabox.config
 
+import android.net.Uri
 import app.nebulabox.data.AppSettings
 import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
-import app.nebulabox.util.Json
-import java.net.URI
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
- * Turns a [Profile] plus [AppSettings] into a sing-box v1.14+ configuration document.
- *
- * Also supports [Protocol.CUSTOM] (raw sing-box JSON configs — either full configs or
- * single outbound objects) and automatically migrates legacy sing-box 1.8–1.13 fields
- * (such as `dns` outbounds and legacy DNS `address` server entries) so they run cleanly
- * on sing-box v1.14.2.
+ * Translates a [Profile] plus [AppSettings] into a complete sing-box v1.14.2 configuration.
+ * Also automatically migrates legacy sing-box (1.8–1.13) custom JSON configs to 1.14.2 schema.
  */
 object ConfigBuilder {
 
-    private const val TUN_TAG = "tun-in"
-    private const val OUT_TAG = "out"
-    private const val DIRECT_TAG = "direct"
-
     fun build(profile: Profile, settings: AppSettings): String {
-        if (profile.protocol == Protocol.CUSTOM || profile.customConfig.isNotBlank()) {
-            return buildCustom(profile.customConfig, settings)
-        }
-        val primaryOutbound = outboundMap(profile, settings)
-        return buildWithPrimaryOutbound(primaryOutbound, OUT_TAG, settings)
-    }
-
-    private fun buildWithPrimaryOutbound(
-        primaryOutbound: Map<String, Any?>,
-        primaryTag: String,
-        settings: AppSettings,
-    ): String {
-        val outbounds = mutableListOf<Map<String, Any?>>()
-        outbounds += primaryOutbound
-        if (primaryOutbound["type"] != "direct") {
-            outbounds += mapOf("type" to "direct", "tag" to DIRECT_TAG)
+        if (profile.protocol == Protocol.CUSTOM) {
+            return buildCustom(profile, settings)
         }
 
-        val rules = mutableListOf<Map<String, Any?>>()
-        rules += mapOf("action" to "sniff")
-        rules += mapOf("protocol" to "dns", "action" to "hijack-dns")
+        val root = JSONObject()
 
-        if (settings.bypassLan) {
-            rules += mapOf(
-                "ip_is_private" to true,
-                "outbound" to DIRECT_TAG,
-            )
-        }
-
-        if (settings.blockAds) {
-            rules += mapOf(
-                "rule_set" to listOf("geosite-category-ads-all"),
-                "action" to "reject",
-            )
-        }
-
-        if (settings.bypassChina) {
-            rules += mapOf(
-                "rule_set" to listOf("geoip-cn", "geosite-cn"),
-                "outbound" to DIRECT_TAG,
-            )
-        }
-
-        if (settings.routeMode == "direct") {
-            rules += mapOf("network" to listOf("tcp", "udp"), "outbound" to DIRECT_TAG)
-        }
-
-        val ruleSets = mutableListOf<Map<String, Any?>>()
-        if (settings.blockAds) {
-            ruleSets += mapOf(
-                "type" to "remote",
-                "tag" to "geosite-category-ads-all",
-                "format" to "binary",
-                "url" to "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs",
-            )
-        }
-        if (settings.bypassChina) {
-            ruleSets += mapOf(
-                "type" to "remote",
-                "tag" to "geoip-cn",
-                "format" to "binary",
-                "url" to "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
-            )
-            ruleSets += mapOf(
-                "type" to "remote",
-                "tag" to "geosite-cn",
-                "format" to "binary",
-                "url" to "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
-            )
-        }
-
-        val tun = defaultTunInbound(settings)
-
-        val dns = mutableMapOf<String, Any?>(
-            "servers" to listOf(
-                buildDnsServer(settings.remoteDns, "remote", primaryTag),
-                buildDnsServer(settings.directDns, "local", null),
-            ),
-            "final" to "remote",
-            "strategy" to settings.dnsStrategy,
+        root.put(
+            "log",
+            JSONObject().apply {
+                put("level", settings.logLevel)
+                put("timestamp", true)
+            },
         )
 
-        val route = mutableMapOf<String, Any?>(
-            "rules" to rules,
-            "auto_detect_interface" to true,
-            "default_domain_resolver" to "local",
-            "final" to primaryTag,
-        )
-        if (ruleSets.isNotEmpty()) {
-            route["rule_set"] = ruleSets
+        val directDnsSpec = settings.directDns.ifBlank { "223.5.5.5" }
+        val remoteDnsSpec = settings.remoteDns.ifBlank { "https://1.1.1.1/dns-query" }
+
+        val dnsServers = JSONArray().apply {
+            put(
+                buildDnsServerJson(
+                    tag = "dns-remote",
+                    rawSpec = remoteDnsSpec,
+                    detour = if (settings.routeMode == "direct") null else "proxy",
+                    domainResolver = "dns-direct",
+                ),
+            )
+            put(
+                buildDnsServerJson(
+                    tag = "dns-direct",
+                    rawSpec = directDnsSpec,
+                    detour = null,
+                    domainResolver = null,
+                ),
+            )
         }
 
-        val log = mapOf("level" to settings.logLevel, "timestamp" to true)
+        val dnsObj = JSONObject().apply {
+            put("servers", dnsServers)
+            put("final", if (settings.routeMode == "direct") "dns-direct" else "dns-remote")
+        }
+        root.put("dns", dnsObj)
 
-        val result = LinkedHashMap<String, Any?>()
-        result["log"] = log
-        result["dns"] = dns
-        result["inbounds"] = listOf(tun)
-        result["outbounds"] = outbounds
-        result["route"] = route
+        val tunAddresses = JSONArray().apply {
+            put("172.19.0.1/30")
+            if (settings.ipv6) put("fdfe:dcba:9876::1/126")
+        }
 
-        return Json.obj(*result.map { (k, v) -> k to v }.toTypedArray())
+        val inbounds = JSONArray().apply {
+            put(
+                JSONObject().apply {
+                    put("type", "tun")
+                    put("tag", "tun-in")
+                    put("interface_name", "tun0")
+                    put("address", tunAddresses)
+                    put("mtu", settings.mtu)
+                    put("auto_route", true)
+                    put("strict_route", false)
+                    put("stack", "mixed")
+                },
+            )
+            put(
+                JSONObject().apply {
+                    put("type", "mixed")
+                    put("tag", "mixed-in")
+                    put("listen", "127.0.0.1")
+                    put("listen_port", settings.mixedPort)
+                },
+            )
+        }
+        root.put("inbounds", inbounds)
+
+        val outbounds = JSONArray().apply {
+            put(buildOutbound(profile, tag = "proxy", domainResolver = "dns-direct"))
+            put(JSONObject().put("type", "direct").put("tag", "direct"))
+        }
+        root.put("outbounds", outbounds)
+
+        val routeRules = JSONArray().apply {
+            put(JSONObject().put("action", "sniff"))
+            put(
+                JSONObject().apply {
+                    put("protocol", "dns")
+                    put("action", "hijack-dns")
+                },
+            )
+            if (settings.bypassLan) {
+                put(
+                    JSONObject().apply {
+                        put("ip_is_private", true)
+                        put("outbound", "direct")
+                    },
+                )
+            }
+        }
+
+        val route = JSONObject().apply {
+            put("auto_detect_interface", true)
+            put("default_domain_resolver", "dns-direct")
+            put("final", if (settings.routeMode == "direct") "direct" else "proxy")
+            put("rules", routeRules)
+        }
+        root.put("route", route)
+
+        return root.toString(2)
     }
-
-    private fun defaultTunAddresses(settings: AppSettings): List<String> {
-        val address = mutableListOf<String>()
-        if (settings.routeMode != "direct") address += "172.19.0.1/30"
-        if (settings.ipv6) address += "fdfe:dcba:9876::1/126"
-        if (address.isEmpty()) address += "172.19.0.1/30"
-        return address
-    }
-
-    private fun defaultTunInbound(settings: AppSettings): Map<String, Any?> = mapOf(
-        "type" to "tun",
-        "tag" to TUN_TAG,
-        "address" to defaultTunAddresses(settings),
-        "auto_route" to true,
-        "strict_route" to true,
-        "mtu" to settings.mtu,
-    )
 
     /**
-     * Converts a user-supplied DNS string (e.g. `1.1.1.1`, `https://1.1.1.1/dns-query`,
-     * `tls://8.8.8.8`, `tcp://1.1.1.1`, `local`) into a sing-box v1.14 DNS server object.
+     * Converts a DNS server string (`https://1.1.1.1/dns-query`, `tls://8.8.8.8`, `223.5.5.5`, `local`, etc.)
+     * into the sing-box 1.14.2 typed DNS server JSON object.
      */
-    private fun buildDnsServer(
-        rawAddress: String,
+    private fun buildDnsServerJson(
         tag: String,
+        rawSpec: String,
         detour: String?,
-        domainResolver: String? = null,
-    ): Map<String, Any?> {
-        val addr = rawAddress.trim().ifBlank { "1.1.1.1" }
-        val map = LinkedHashMap<String, Any?>()
+        domainResolver: String?,
+    ): JSONObject {
+        val spec = rawSpec.trim()
+        val obj = JSONObject()
+        obj.put("tag", tag)
 
         when {
-            addr.equals("local", ignoreCase = true) || addr.startsWith("local://", true) -> {
-                map["type"] = "local"
-                map["tag"] = tag
+            spec.equals("local", ignoreCase = true) || spec.equals("system", ignoreCase = true) -> {
+                obj.put("type", "local")
+                return obj
             }
-            addr.startsWith("https://", true) || addr.startsWith("h3://", true) -> {
-                val isH3 = addr.startsWith("h3://", true)
-                val normalized = if (isH3) "https://" + addr.substringAfter("://") else addr
-                val uri = runCatching { URI(normalized) }.getOrNull()
-                val host = uri?.host?.ifBlank { "1.1.1.1" } ?: "1.1.1.1"
-                val port = if (uri != null && uri.port > 0) uri.port else null
-                val path = uri?.path?.takeIf { it.isNotBlank() && it != "/dns-query" }
-                map["type"] = if (isH3) "h3" else "https"
-                map["tag"] = tag
-                map["server"] = host
-                if (port != null) map["server_port"] = port
-                if (path != null) map["path"] = path
+            spec.equals("fakeip", ignoreCase = true) -> {
+                obj.put("type", "fakeip")
+                obj.put("inet4_range", "198.18.0.0/15")
+                obj.put("inet6_range", "fc00::/18")
+                return obj
             }
-            addr.startsWith("tls://", true) || addr.startsWith("quic://", true) ||
-                addr.startsWith("tcp://", true) || addr.startsWith("udp://", true) -> {
-                val scheme = addr.substringBefore("://").lowercase()
-                val rest = addr.substringAfter("://").substringBefore("/")
-                val host = rest.substringBefore(":")
-                val port = rest.substringAfter(":", "").toIntOrNull()
-                map["type"] = scheme
-                map["tag"] = tag
-                map["server"] = host.ifBlank { "1.1.1.1" }
-                if (port != null) map["server_port"] = port
+            spec.contains("://") -> {
+                val uri = runCatching { Uri.parse(spec) }.getOrNull()
+                val scheme = uri?.scheme?.lowercase() ?: "udp"
+                val host = uri?.host?.removeSurrounding("[", "]")?.takeIf { it.isNotBlank() } ?: "1.1.1.1"
+                val port = uri?.port ?: -1
+                val path = uri?.path?.takeIf { it.isNotBlank() }
+
+                val type = when (scheme) {
+                    "https", "doh" -> "https"
+                    "h3", "http3" -> "h3"
+                    "tls", "dot" -> "tls"
+                    "quic", "doq" -> "quic"
+                    "tcp" -> "tcp"
+                    "udp", "dns" -> "udp"
+                    else -> "udp"
+                }
+                obj.put("type", type)
+                obj.put("server", host)
+                if (port > 0) {
+                    obj.put("server_port", port)
+                }
+                if ((type == "https" || type == "h3") && path != null && path != "/dns-query") {
+                    obj.put("path", path)
+                }
+                if (!detour.isNullOrBlank()) {
+                    obj.put("detour", detour)
+                }
+                if (!domainResolver.isNullOrBlank() && domainResolver != tag && !isIpLiteral(host)) {
+                    obj.put("domain_resolver", domainResolver)
+                }
             }
             else -> {
-                val clean = addr.substringBefore("/")
-                val host = clean.substringBefore(":")
-                val port = clean.substringAfter(":", "").toIntOrNull()
-                map["type"] = "udp"
-                map["tag"] = tag
-                map["server"] = host.ifBlank { "1.1.1.1" }
-                if (port != null) map["server_port"] = port
+                val hostPort = spec.substringBefore('/')
+                val host: String
+                val port: Int
+                if (hostPort.startsWith("[") && hostPort.contains("]:")) {
+                    host = hostPort.substringAfter("[").substringBefore("]:")
+                    port = hostPort.substringAfter("]:").toIntOrNull() ?: -1
+                } else if (hostPort.count { it == ':' } == 1) {
+                    host = hostPort.substringBefore(':')
+                    port = hostPort.substringAfter(':').toIntOrNull() ?: -1
+                } else {
+                    host = hostPort.removeSurrounding("[", "]")
+                    port = -1
+                }
+                obj.put("type", "udp")
+                obj.put("server", host.ifBlank { "223.5.5.5" })
+                if (port > 0 && port != 53) {
+                    obj.put("server_port", port)
+                }
+                if (!detour.isNullOrBlank()) {
+                    obj.put("detour", detour)
+                }
+                if (!domainResolver.isNullOrBlank() && domainResolver != tag && !isIpLiteral(host)) {
+                    obj.put("domain_resolver", domainResolver)
+                }
             }
         }
+        return obj
+    }
 
-        if (!detour.isNullOrBlank() && map["type"] != "local" && map["type"] != "hosts") {
-            map["detour"] = detour
-        }
-        if (!domainResolver.isNullOrBlank() && map["server"]?.toString()?.any { it.isLetter() } == true) {
-            map["domain_resolver"] = domainResolver
-        }
-        return map
+    private fun isIpLiteral(host: String): Boolean {
+        val h = host.trim().removeSurrounding("[", "]")
+        if (h.isEmpty()) return false
+        if (h.contains(':')) return true // IPv6 literal
+        val parts = h.split('.')
+        return parts.size == 4 && parts.all { p -> p.toIntOrNull()?.let { it in 0..255 } == true }
     }
 
     /**
-     * Builds a runnable sing-box v1.14 configuration from a Custom JSON string.
-     * Supports both:
-     *  - A complete sing-box configuration object (`{"outbounds": [...], ...}`)
-     *  - A single sing-box outbound object (`{"type": "vless", ...}`)
+     * Adapts a user-supplied custom JSON config or single outbound JSON object so that it runs
+     * cleanly inside Android's VpnService (`tun0`) on sing-box v1.14.2.
      */
-    @Suppress("UNCHECKED_CAST")
-    private fun buildCustom(rawJson: String, settings: AppSettings): String {
-        val trimmed = rawJson.trim()
-        val parsed = Json.miniMap(trimmed)
-        if (parsed.isEmpty()) return trimmed
+    private fun buildCustom(profile: Profile, settings: AppSettings): String {
+        val raw = profile.customConfig.trim()
+        require(raw.isNotEmpty()) { "Custom JSON config is empty" }
+        val parsed = JSONObject(raw)
 
-        // Case 1: Single outbound JSON object (has "type" but no "outbounds"/"endpoints")
-        if (!parsed.containsKey("outbounds") && !parsed.containsKey("endpoints") && parsed.containsKey("type")) {
-            val outbound = LinkedHashMap(parsed)
-            val tag = (outbound["tag"] as? String)?.ifBlank { OUT_TAG } ?: OUT_TAG
-            outbound["tag"] = tag
-            return buildWithPrimaryOutbound(outbound, tag, settings)
+        // Case 1: Single outbound object (has "type" and no "outbounds" array)
+        if (!parsed.has("outbounds") && parsed.optString("type").isNotBlank()) {
+            val root = JSONObject(build(profile.copy(protocol = Protocol.SOCKS, address = "127.0.0.1"), settings))
+            val outboundCopy = JSONObject(parsed.toString())
+            if (outboundCopy.optString("tag").isBlank()) {
+                outboundCopy.put("tag", "proxy")
+            }
+            stripLegacyInboundFields(outboundCopy)
+            outboundCopy.remove("domain_strategy")
+            val primaryTag = outboundCopy.optString("tag", "proxy")
+            val outbounds = JSONArray().apply {
+                put(outboundCopy)
+                if (primaryTag != "direct") {
+                    put(JSONObject().put("type", "direct").put("tag", "direct"))
+                }
+            }
+            root.put("outbounds", outbounds)
+            root.optJSONObject("route")?.put("final", if (settings.routeMode == "direct") "direct" else primaryTag)
+            root.optJSONObject("dns")?.optJSONArray("servers")?.let { servers ->
+                for (i in 0 until servers.length()) {
+                    val s = servers.optJSONObject(i) ?: continue
+                    if (s.optString("detour") == "proxy") s.put("detour", primaryTag)
+                }
+            }
+            return root.toString(2)
         }
 
-        // Case 2: Full sing-box config JSON
-        val root = LinkedHashMap<String, Any?>(parsed)
+        // Case 2: Full sing-box config JSON -> upgrade any 1.8–1.13 legacy fields to 1.14.2
+        val root = JSONObject(parsed.toString())
 
-        // 2a. Clean up outbounds: remove deprecated "dns" outbound (removed in sing-box 1.13+)
-        val rawOutbounds = (root["outbounds"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
-        val removedDnsTags = mutableSetOf<String>()
-        val removedBlockTags = mutableSetOf<String>()
-        val cleanedOutbounds = mutableListOf<Map<String, Any?>>()
+        if (!root.has("log")) {
+            root.put(
+                "log",
+                JSONObject().apply {
+                    put("level", settings.logLevel)
+                    put("timestamp", true)
+                },
+            )
+        }
 
-        for (ob in rawOutbounds) {
-            val type = ob["type"]?.toString()?.lowercase() ?: ""
-            val tag = ob["tag"]?.toString() ?: ""
+        // Remove top-level experimental deprecated fields if incompatible
+        root.optJSONObject("experimental")?.optJSONObject("cache_file")?.remove("store_rdrc")
+
+        // 1. Inspect and migrate outbounds
+        val rawOutbounds = root.optJSONArray("outbounds") ?: JSONArray()
+        val cleanOutbounds = JSONArray()
+        val dnsOutboundTags = mutableSetOf<String>("dns-out")
+        val blockOutboundTags = mutableSetOf<String>("block", "block-out")
+        val emptyDirectTags = mutableSetOf<String>()
+        var hasDirect = false
+        var firstProxyTag: String? = null
+
+        for (i in 0 until rawOutbounds.length()) {
+            val ob = rawOutbounds.optJSONObject(i) ?: continue
+            val type = ob.optString("type")
+            val tag = ob.optString("tag")
             when (type) {
                 "dns" -> {
-                    if (tag.isNotEmpty()) removedDnsTags += tag
+                    if (tag.isNotBlank()) dnsOutboundTags.add(tag)
+                    continue // Removed in sing-box 1.13.0
                 }
                 "block" -> {
-                    if (tag.isNotEmpty()) removedBlockTags += tag
-                    // Keep or replace block outbound with direct if needed, or migrate rules to reject
+                    if (tag.isNotBlank()) blockOutboundTags.add(tag)
+                    continue // Removed in sing-box 1.13.0
+                }
+                "direct" -> {
+                    hasDirect = true
+                    val effectiveTag = tag.ifBlank { "direct" }
+                    ob.put("tag", effectiveTag)
+                    stripLegacyInboundFields(ob)
+                    ob.remove("domain_strategy")
+                    // Check if this direct outbound is empty (only has type & tag)
+                    val keys = ob.keys().asSequence().toSet() - setOf("type", "tag")
+                    if (keys.isEmpty()) {
+                        emptyDirectTags.add(effectiveTag)
+                    }
+                    cleanOutbounds.put(ob)
                 }
                 else -> {
-                    val obCopy = LinkedHashMap(ob)
-                    // Remove deprecated outbound field domain_strategy if needed
-                    cleanedOutbounds += obCopy
+                    if (firstProxyTag == null && tag.isNotBlank()) {
+                        firstProxyTag = tag
+                    }
+                    stripLegacyInboundFields(ob)
+                    ob.remove("domain_strategy")
+                    cleanOutbounds.put(ob)
                 }
             }
         }
-        if (cleanedOutbounds.none { it["type"] == "direct" }) {
-            cleanedOutbounds += mapOf("type" to "direct", "tag" to DIRECT_TAG)
-        }
-        val directTag = cleanedOutbounds.firstOrNull { it["type"] == "direct" }?.get("tag")?.toString() ?: DIRECT_TAG
-        val primaryProxyTag = cleanedOutbounds.firstOrNull {
-            it["type"] != "direct" && it["type"] != "block" && it["type"] != "dns"
-        }?.get("tag")?.toString() ?: directTag
 
-        if (rawOutbounds.isNotEmpty()) {
-            root["outbounds"] = cleanedOutbounds
+        if (!hasDirect) {
+            cleanOutbounds.put(JSONObject().put("type", "direct").put("tag", "direct"))
+            emptyDirectTags.add("direct")
         }
 
-        // 2b. Ensure Android TUN inbound exists and uses the VpnService address (172.19.0.1/30)
-        val rawInbounds = (root["inbounds"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
-        val hasTun = rawInbounds.any { it["type"] == "tun" }
-        val updatedInbounds = if (hasTun) {
-            rawInbounds.map { ib ->
-                if (ib["type"] == "tun") {
-                    val tunCopy = LinkedHashMap(ib)
-                    tunCopy.remove("inet4_address")
-                    tunCopy.remove("inet6_address")
-                    tunCopy.remove("inet4_route_address")
-                    tunCopy.remove("inet6_route_address")
-                    tunCopy.remove("endpoint_independent_nat")
-                    tunCopy.remove("gso")
-                    tunCopy["address"] = defaultTunAddresses(settings)
-                    tunCopy["auto_route"] = true
-                    tunCopy["mtu"] = (tunCopy["mtu"] as? Number)?.toInt() ?: settings.mtu
-                    tunCopy
+        // Strip detour to empty direct outbounds on all outbounds
+        for (i in 0 until cleanOutbounds.length()) {
+            val ob = cleanOutbounds.optJSONObject(i) ?: continue
+            val detour = ob.optString("detour")
+            if (detour.isNotBlank() && detour in emptyDirectTags) {
+                ob.remove("detour")
+            }
+        }
+        root.put("outbounds", cleanOutbounds)
+
+        // 2. Migrate inbounds -> ensure Android tun0 inbound & strip legacy InboundOptions
+        val tunAddresses = JSONArray().apply {
+            put("172.19.0.1/30")
+            if (settings.ipv6) put("fdfe:dcba:9876::1/126")
+        }
+        val tunInbound = JSONObject().apply {
+            put("type", "tun")
+            put("tag", "tun-in")
+            put("interface_name", "tun0")
+            put("address", tunAddresses)
+            put("mtu", settings.mtu)
+            put("auto_route", true)
+            put("strict_route", false)
+            put("stack", "mixed")
+        }
+
+        val existingInbounds = root.optJSONArray("inbounds")
+        val newInbounds = JSONArray()
+        var hasTun = false
+        if (existingInbounds != null) {
+            for (i in 0 until existingInbounds.length()) {
+                val ib = existingInbounds.optJSONObject(i) ?: continue
+                if (ib.optString("type") == "tun") {
+                    if (!hasTun) {
+                        val tag = ib.optString("tag").ifBlank { "tun-in" }
+                        tunInbound.put("tag", tag)
+                        newInbounds.put(tunInbound)
+                        hasTun = true
+                    }
                 } else {
-                    ib
+                    stripLegacyInboundFields(ib)
+                    if (ib.optString("listen").isBlank()) {
+                        ib.put("listen", "127.0.0.1")
+                    }
+                    newInbounds.put(ib)
                 }
             }
+        }
+        if (!hasTun) {
+            val merged = JSONArray()
+            merged.put(tunInbound)
+            for (i in 0 until newInbounds.length()) {
+                merged.put(newInbounds.get(i))
+            }
+            root.put("inbounds", merged)
         } else {
-            listOf(defaultTunInbound(settings)) + rawInbounds
+            root.put("inbounds", newInbounds)
         }
-        root["inbounds"] = updatedInbounds
 
-        // 2c. Migrate legacy DNS config to sing-box 1.14 format if present
-        val rawDns = root["dns"] as? Map<String, Any?>
-        var localDnsTag: String? = null
-        if (rawDns != null) {
-            val dnsCopy = LinkedHashMap(rawDns)
-            dnsCopy.remove("independent_cache")
-            dnsCopy.remove("fakeip")
+        // 3. Migrate DNS to sing-box 1.14.2 format
+        val dnsObj = root.optJSONObject("dns") ?: JSONObject()
+        val legacyFakeIp = dnsObj.optJSONObject("fakeip")
+        val fakeIpInet4 = legacyFakeIp?.optString("inet4_range")?.takeIf { it.isNotBlank() } ?: "198.18.0.0/15"
+        val fakeIpInet6 = legacyFakeIp?.optString("inet6_range")?.takeIf { it.isNotBlank() } ?: "fc00::/18"
+        dnsObj.remove("fakeip")
+        dnsObj.remove("independent_cache")
 
-            val rawServers = (dnsCopy["servers"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }
-            if (rawServers != null) {
-                val migratedServers = mutableListOf<Map<String, Any?>>()
-                val rcodeBlockedTags = mutableSetOf<String>()
+        val rawDnsServers = dnsObj.optJSONArray("servers") ?: JSONArray()
+        val cleanDnsServers = JSONArray()
+        val blockDnsServerTags = mutableSetOf<String>("block", "dns-block", "rcode://success", "rcode://refused")
+        var directDnsTag: String? = null
+        var firstDnsTag: String? = null
 
-                for ((idx, srv) in rawServers.withIndex()) {
-                    val tag = srv["tag"]?.toString() ?: "dns-$idx"
-                    val legacyAddr = srv["address"]?.toString()
-                    if (legacyAddr != null) {
-                        if (legacyAddr.startsWith("rcode://", true) || legacyAddr.equals("block", true)) {
-                            rcodeBlockedTags += tag
-                            continue
-                        }
-                        val detour = srv["detour"]?.toString()?.takeIf { it != directTag }
-                        val addrResolver = srv["address_resolver"]?.toString()
-                        val migrated = buildDnsServer(legacyAddr, tag, detour, addrResolver)
-                        if (detour == null || srv["detour"] == directTag || migrated["type"] == "local") {
-                            if (localDnsTag == null) localDnsTag = tag
-                        }
-                        migratedServers += migrated
-                    } else {
-                        val srvCopy = LinkedHashMap(srv)
-                        val type = srvCopy["type"]?.toString() ?: "udp"
-                        if (type == "local" || srvCopy["detour"] == null || srvCopy["detour"] == directTag) {
-                            if (localDnsTag == null && type != "hosts" && type != "fakeip") {
-                                localDnsTag = tag
-                            }
-                        }
-                        migratedServers += srvCopy
+        for (i in 0 until rawDnsServers.length()) {
+            val s = rawDnsServers.optJSONObject(i) ?: continue
+            val tag = s.optString("tag").ifBlank { "dns-$i" }
+            val address = s.optString("address")
+            val type = s.optString("type")
+
+            if (address.startsWith("rcode://", ignoreCase = true) || type.equals("rcode", ignoreCase = true)) {
+                blockDnsServerTags.add(tag)
+                continue
+            }
+
+            val migrated = if (type.isBlank() || type == "legacy" || address.isNotBlank()) {
+                val rawDetour = s.optString("detour").takeIf { it.isNotBlank() && it !in emptyDirectTags && it !in dnsOutboundTags && it !in blockOutboundTags }
+                val rawResolver = s.optString("domain_resolver").ifBlank { s.optString("address_resolver") }.takeIf { it.isNotBlank() }
+                if (address.equals("fakeip", ignoreCase = true) || type == "fakeip") {
+                    JSONObject().apply {
+                        put("type", "fakeip")
+                        put("tag", tag)
+                        put("inet4_range", s.optString("inet4_range").ifBlank { fakeIpInet4 })
+                        put("inet6_range", s.optString("inet6_range").ifBlank { fakeIpInet6 })
                     }
+                } else {
+                    buildDnsServerJson(
+                        tag = tag,
+                        rawSpec = address.ifBlank { s.optString("server").ifBlank { "1.1.1.1" } },
+                        detour = rawDetour,
+                        domainResolver = rawResolver,
+                    )
                 }
-                if (localDnsTag == null) {
-                    localDnsTag = "local-dns-auto"
-                    migratedServers += buildDnsServer(settings.directDns, localDnsTag, null)
+            } else {
+                val copy = JSONObject(s.toString())
+                copy.put("tag", tag)
+                copy.remove("address")
+                copy.remove("address_resolver")
+                copy.remove("address_strategy")
+                copy.remove("strategy")
+                val d = copy.optString("detour")
+                if (d.isNotBlank() && (d in emptyDirectTags || d in dnsOutboundTags || d in blockOutboundTags)) {
+                    copy.remove("detour")
                 }
-                dnsCopy["servers"] = migratedServers
+                copy
+            }
 
-                // Migrate legacy DNS rules (e.g. outbound rule or server pointing to rcode://block)
-                val rawDnsRules = (dnsCopy["rules"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }
-                if (rawDnsRules != null) {
-                    val migratedDnsRules = rawDnsRules.mapNotNull { rule ->
-                        // Drop legacy "outbound": "any" DNS rule which was replaced by default_domain_resolver
-                        if (rule.containsKey("outbound")) return@mapNotNull null
-                        val ruleCopy = LinkedHashMap(rule)
-                        ruleCopy.remove("rule_set_ip_cidr_accept_empty")
-                        val targetServer = ruleCopy["server"]?.toString()
-                        if (targetServer != null && targetServer in rcodeBlockedTags) {
-                            ruleCopy.remove("server")
-                            ruleCopy["action"] = "reject"
-                        }
-                        ruleCopy
-                    }
-                    dnsCopy["rules"] = migratedDnsRules
+            if (firstDnsTag == null && migrated.optString("type") != "fakeip") {
+                firstDnsTag = tag
+            }
+            if (directDnsTag == null && migrated.optString("detour").isBlank() && migrated.optString("type") != "fakeip") {
+                directDnsTag = tag
+            }
+            cleanDnsServers.put(migrated)
+        }
+
+        // Ensure at least one direct DNS server exists for domain resolution
+        if (directDnsTag == null) {
+            directDnsTag = "dns-direct"
+            cleanDnsServers.put(
+                buildDnsServerJson(
+                    tag = directDnsTag,
+                    rawSpec = settings.directDns.ifBlank { "223.5.5.5" },
+                    detour = null,
+                    domainResolver = null,
+                ),
+            )
+        }
+        if (firstDnsTag == null) {
+            firstDnsTag = directDnsTag
+        }
+
+        // Ensure any domain-based DNS server has domain_resolver set
+        val validDnsTags = mutableSetOf<String>()
+        for (i in 0 until cleanDnsServers.length()) {
+            cleanDnsServers.optJSONObject(i)?.optString("tag")?.takeIf { it.isNotBlank() }?.let { validDnsTags.add(it) }
+        }
+        for (i in 0 until cleanDnsServers.length()) {
+            val s = cleanDnsServers.optJSONObject(i) ?: continue
+            val serverHost = s.optString("server")
+            val existingResolver = s.optString("domain_resolver")
+            if (existingResolver.isNotBlank() && existingResolver !in validDnsTags) {
+                s.put("domain_resolver", directDnsTag)
+            } else if (serverHost.isNotBlank() && !isIpLiteral(serverHost) && s.optString("domain_resolver").isBlank() && s.optString("tag") != directDnsTag) {
+                s.put("domain_resolver", directDnsTag)
+            }
+        }
+
+        dnsObj.put("servers", cleanDnsServers)
+        val dnsFinal = dnsObj.optString("final")
+        if (dnsFinal.isBlank() || dnsFinal !in validDnsTags) {
+            dnsObj.put("final", firstDnsTag ?: directDnsTag)
+        }
+
+        // Migrate dns.rules
+        val rawDnsRules = dnsObj.optJSONArray("dns_rules") ?: dnsObj.optJSONArray("rules")
+        if (rawDnsRules != null) {
+            val cleanDnsRules = JSONArray()
+            for (i in 0 until rawDnsRules.length()) {
+                val r = rawDnsRules.optJSONObject(i) ?: continue
+                val cleaned = sanitizeDnsRule(r, validDnsTags, blockDnsServerTags, blockOutboundTags)
+                if (cleaned != null) {
+                    cleanDnsRules.put(cleaned)
                 }
             }
-            root["dns"] = dnsCopy
+            dnsObj.put("rules", cleanDnsRules)
+        }
+        root.put("dns", dnsObj)
+
+        // 4. Migrate route
+        val route = root.optJSONObject("route") ?: JSONObject()
+        route.put("auto_detect_interface", true)
+        route.remove("geoip")
+        route.remove("geosite")
+
+        val existingDefaultResolver = route.optString("default_domain_resolver")
+        if (existingDefaultResolver.isBlank() || (route.optJSONObject("default_domain_resolver") == null && existingDefaultResolver !in validDnsTags)) {
+            route.put("default_domain_resolver", directDnsTag)
         }
 
-        // 2d. Ensure route has auto_detect_interface and migrate removed dns/block outbound rules
-        val rawRoute = (root["route"] as? Map<String, Any?>) ?: emptyMap()
-        val routeCopy = LinkedHashMap(rawRoute)
-        routeCopy["auto_detect_interface"] = true
-        if (!routeCopy.containsKey("default_domain_resolver") && localDnsTag != null) {
-            routeCopy["default_domain_resolver"] = localDnsTag
+        val validOutboundTags = mutableSetOf<String>()
+        for (i in 0 until cleanOutbounds.length()) {
+            cleanOutbounds.optJSONObject(i)?.optString("tag")?.takeIf { it.isNotBlank() }?.let { validOutboundTags.add(it) }
         }
-        if (!routeCopy.containsKey("final")) {
-            routeCopy["final"] = primaryProxyTag
+        val routeFinal = route.optString("final")
+        if (routeFinal.isBlank() || routeFinal !in validOutboundTags) {
+            route.put("final", firstProxyTag ?: "direct")
         }
 
-        val rawRules = (routeCopy["rules"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
-        val migratedRules = mutableListOf<Map<String, Any?>>()
-        var hasSniff = false
-        var hasDnsHijack = false
+        val rawRouteRules = route.optJSONArray("rules") ?: JSONArray()
+        val cleanRouteRules = JSONArray()
+        cleanRouteRules.put(JSONObject().put("action", "sniff"))
+        cleanRouteRules.put(JSONObject().put("protocol", "dns").put("action", "hijack-dns"))
 
-        for (rule in rawRules) {
-            val ruleCopy = LinkedHashMap(rule)
-            val action = ruleCopy["action"]?.toString()
-            val ob = ruleCopy["outbound"]?.toString()
-            if (action == "sniff") hasSniff = true
-            if (action == "hijack-dns" || ruleCopy["protocol"] == "dns") hasDnsHijack = true
-
-            if (ob != null && (ob in removedDnsTags || ob == "dns-out" || ruleCopy["protocol"] == "dns")) {
-                ruleCopy.remove("outbound")
-                ruleCopy["action"] = "hijack-dns"
-                hasDnsHijack = true
-            } else if (ob != null && (ob in removedBlockTags || ob == "block")) {
-                ruleCopy.remove("outbound")
-                ruleCopy["action"] = "reject"
+        for (i in 0 until rawRouteRules.length()) {
+            val r = rawRouteRules.optJSONObject(i) ?: continue
+            val cleaned = sanitizeRouteRule(r, validOutboundTags, dnsOutboundTags, blockOutboundTags)
+            if (cleaned != null) {
+                cleanRouteRules.put(cleaned)
             }
-            migratedRules += ruleCopy
         }
+        route.put("rules", cleanRouteRules)
+        root.put("route", route)
 
-        if (!hasSniff) {
-            migratedRules.add(0, mapOf("action" to "sniff"))
-        }
-        if (!hasDnsHijack) {
-            migratedRules.add(1, mapOf("protocol" to "dns", "action" to "hijack-dns"))
-        }
-        routeCopy["rules"] = migratedRules
-        root["route"] = routeCopy
-
-        // 2e. Migrate experimental.cache_file.store_rdrc -> store_dns if present
-        val rawExp = root["experimental"] as? Map<String, Any?>
-        if (rawExp != null) {
-            val expCopy = LinkedHashMap(rawExp)
-            val cacheFile = expCopy["cache_file"] as? Map<String, Any?>
-            if (cacheFile != null && cacheFile.containsKey("store_rdrc")) {
-                val cfCopy = LinkedHashMap(cacheFile)
-                val storeRdrc = cfCopy.remove("store_rdrc")
-                if (storeRdrc == true) cfCopy["store_dns"] = true
-                expCopy["cache_file"] = cfCopy
-            }
-            root["experimental"] = expCopy
-        }
-
-        return Json.obj(*root.map { (k, v) -> k to v }.toTypedArray())
+        return root.toString(2)
     }
 
-    /** Validates that the document is well formed before handing it to the core. */
-    fun validate(config: String): String? {
-        val parsed = Json.miniMap(config)
-        if (parsed.isEmpty()) return "configuration is empty or invalid JSON"
-        val outbounds = parsed["outbounds"] as? List<*>
-        val endpoints = parsed["endpoints"] as? List<*>
-        if (outbounds.isNullOrEmpty() && endpoints.isNullOrEmpty()) {
-            return "missing outbounds in configuration"
-        }
-        return null
+    private fun stripLegacyInboundFields(obj: JSONObject) {
+        obj.remove("sniff")
+        obj.remove("sniff_override_destination")
+        obj.remove("sniff_timeout")
+        obj.remove("domain_strategy")
+        obj.remove("udp_disable_domain_unmapping")
+        obj.remove("inet4_address")
+        obj.remove("inet6_address")
+        obj.remove("inet4_route_address")
+        obj.remove("inet6_route_address")
+        obj.remove("inet4_route_exclude_address")
+        obj.remove("inet6_route_exclude_address")
+        obj.remove("gso")
+        obj.remove("endpoint_independent_nat")
     }
 
-    private fun outboundMap(profile: Profile, settings: AppSettings): Map<String, Any?> {
-        val base = mutableListOf<Pair<String, Any?>>(
-            "tag" to OUT_TAG,
-            "type" to profile.protocol.wire,
-        )
+    private fun sanitizeDnsRule(
+        rule: JSONObject,
+        validDnsTags: Set<String>,
+        blockDnsServerTags: Set<String>,
+        blockOutboundTags: Set<String>,
+    ): JSONObject? {
+        val copy = JSONObject(rule.toString())
+        copy.remove("geosite")
+        copy.remove("geoip")
+        copy.remove("source_geoip")
+        copy.remove("outbound")
+        copy.remove("rule_set_ip_cidr_accept_empty")
+        copy.remove("rule_set_ipcidr_match_source")
+        copy.remove("strategy")
 
-        val supportsMux = profile.protocol in setOf(
-            Protocol.VLESS, Protocol.VMESS, Protocol.TROJAN, Protocol.SHADOWSOCKS,
-        )
-
-        if (profile.server.isNotBlank()) {
-            base += "server" to profile.server
-            base += "server_port" to profile.serverPort
+        val server = copy.optString("server")
+        val action = copy.optString("action")
+        if (server in blockDnsServerTags || server in blockOutboundTags) {
+            copy.remove("server")
+            copy.put("action", "reject")
+        } else if (action.isBlank() || action == "route") {
+            if (server.isBlank() || server !in validDnsTags) {
+                return null
+            }
         }
 
+        val conditionKeys = copy.keys().asSequence().toSet() - setOf(
+            "action", "server", "disable_cache", "rewrite_ttl", "client_subnet", "type", "invert", "method", "no_drop",
+        )
+        if (conditionKeys.isEmpty()) return null
+        return copy
+    }
+
+    private fun sanitizeRouteRule(
+        rule: JSONObject,
+        validOutboundTags: Set<String>,
+        dnsOutboundTags: Set<String>,
+        blockOutboundTags: Set<String>,
+    ): JSONObject? {
+        val copy = JSONObject(rule.toString())
+        copy.remove("geosite")
+        copy.remove("geoip")
+        copy.remove("source_geoip")
+        copy.remove("rule_set_ipcidr_match_source")
+
+        val action = copy.optString("action")
+        val outbound = copy.optString("outbound")
+
+        if (action == "sniff" || action == "hijack-dns") {
+            // Already prepended at the start of route.rules
+            val conditionKeys = copy.keys().asSequence().toSet() - setOf("action", "protocol", "port")
+            if (conditionKeys.isEmpty()) return null
+        }
+
+        if (outbound in dnsOutboundTags || (copy.optString("protocol") == "dns" && action.isBlank())) {
+            copy.remove("outbound")
+            copy.put("action", "hijack-dns")
+            val conditionKeys = copy.keys().asSequence().toSet() - setOf("action", "protocol", "port")
+            if (conditionKeys.isEmpty()) return null
+        } else if (outbound in blockOutboundTags) {
+            copy.remove("outbound")
+            copy.put("action", "reject")
+        } else if (action.isBlank() || action == "route") {
+            if (outbound.isBlank() || outbound !in validOutboundTags) {
+                return null
+            }
+        }
+
+        val conditionKeys = copy.keys().asSequence().toSet() - setOf(
+            "action", "outbound", "type", "invert", "method", "no_drop", "sniffer", "timeout", "strategy", "server",
+        )
+        if (conditionKeys.isEmpty()) return null
+        return copy
+    }
+
+    fun buildOutbound(profile: Profile, tag: String = profile.id, domainResolver: String? = null): JSONObject {
+        val o = JSONObject()
+        o.put("tag", tag)
+        if (!domainResolver.isNullOrBlank() && !isIpLiteral(profile.address)) {
+            o.put("domain_resolver", domainResolver)
+        }
         when (profile.protocol) {
             Protocol.VLESS -> {
-                base += "uuid" to profile.uuid
-                if (profile.flow.isNotBlank()) base += "flow" to profile.flow
+                o.put("type", "vless")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                o.put("uuid", profile.uuid)
+                if (profile.flow.isNotBlank()) o.put("flow", profile.flow)
+                o.put("packet_encoding", "xudp")
+                attachTls(o, profile)
+                attachTransport(o, profile)
             }
 
             Protocol.VMESS -> {
-                base += "uuid" to profile.uuid
-                base += "alter_id" to profile.alterId
-                if (profile.security.isNotBlank()) base += "security" to profile.security
+                o.put("type", "vmess")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                o.put("uuid", profile.uuid)
+                o.put("security", profile.method.ifBlank { "auto" })
+                o.put("alter_id", profile.alterId)
+                attachTls(o, profile)
+                attachTransport(o, profile)
             }
 
-            Protocol.TROJAN -> base += "password" to profile.password
+            Protocol.TROJAN -> {
+                o.put("type", "trojan")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                o.put("password", profile.password)
+                attachTls(o, profile, forceTls = true)
+                attachTransport(o, profile)
+            }
 
             Protocol.SHADOWSOCKS -> {
-                base += "method" to profile.method
-                base += "password" to profile.password
-                if (profile.plugin.isNotBlank()) {
-                    base += "plugin" to profile.plugin
-                    if (profile.pluginOptions.isNotBlank()) {
-                        base += "plugin_opts" to profile.pluginOptions
-                    }
-                }
-            }
-
-            Protocol.SOCKS, Protocol.HTTP -> {
-                if (profile.username.isNotBlank()) base += "username" to profile.username
-                if (profile.password.isNotBlank()) base += "password" to profile.password
+                o.put("type", "shadowsocks")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                o.put("method", profile.method.ifBlank { "2022-blake3-aes-128-gcm" })
+                o.put("password", profile.password)
             }
 
             Protocol.HYSTERIA2 -> {
-                base += "password" to profile.password
-                if (profile.upMbps > 0) base += "up_mbps" to profile.upMbps
-                if (profile.downMbps > 0) base += "down_mbps" to profile.downMbps
+                o.put("type", "hysteria2")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                o.put("password", profile.password)
+                if (profile.upMbps > 0) o.put("up_mbps", profile.upMbps)
+                if (profile.downMbps > 0) o.put("down_mbps", profile.downMbps)
+                if (profile.obfsPassword.isNotBlank()) {
+                    o.put(
+                        "obfs",
+                        JSONObject().apply {
+                            put("type", "salamander")
+                            put("password", profile.obfsPassword)
+                        },
+                    )
+                }
+                attachTls(o, profile, forceTls = true)
             }
 
             Protocol.TUIC -> {
-                base += "uuid" to profile.uuid
-                if (profile.password.isNotBlank()) base += "password" to profile.password
+                o.put("type", "tuic")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                o.put("uuid", profile.uuid)
+                o.put("password", profile.password)
+                o.put("congestion_control", profile.congestionControl.ifBlank { "bbr" })
+                o.put("udp_relay_mode", profile.udpRelayMode.ifBlank { "native" })
+                attachTls(o, profile, forceTls = true)
             }
 
             Protocol.WIREGUARD -> {
-                base += "private_key" to profile.privateKey
-                base += "peer_public_key" to profile.peerPublicKey
-                if (profile.preSharedKey.isNotBlank()) {
-                    base += "pre_shared_key" to profile.preSharedKey
+                o.put("type", "wireguard")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                o.put("local_address", JSONArray(profile.wgLocalAddress.split(",").map { it.trim() }.filter { it.isNotEmpty() }))
+                o.put("private_key", profile.wgPrivateKey)
+                o.put("peer_public_key", profile.wgPeerPublicKey)
+                if (profile.wgPreSharedKey.isNotBlank()) o.put("pre_shared_key", profile.wgPreSharedKey)
+                if (profile.wgReserved.isNotBlank()) {
+                    val bytes = profile.wgReserved.split(",").mapNotNull { it.trim().toIntOrNull() }
+                    if (bytes.size == 3) o.put("reserved", JSONArray(bytes))
                 }
-                if (profile.localAddresses.isNotEmpty()) {
-                    base += "local_address" to profile.localAddresses
-                }
-                if (profile.reserved.isNotEmpty()) base += "reserved" to profile.reserved
-                base += "mtu" to profile.mtu
+                o.put("mtu", profile.wgMtu)
             }
 
-            Protocol.SSH -> {
-                if (profile.username.isNotBlank()) base += "user" to profile.username
-                if (profile.password.isNotBlank()) base += "password" to profile.password
-                base += "client_version" to profile.clientVersion
-                if (profile.hostKeyAlgorithms.isNotEmpty()) {
-                    base += "host_key_algorithms" to profile.hostKeyAlgorithms
-                }
+            Protocol.SOCKS -> {
+                o.put("type", "socks")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                o.put("version", "5")
+                if (profile.username.isNotBlank()) o.put("username", profile.username)
+                if (profile.password.isNotBlank()) o.put("password", profile.password)
             }
 
-            Protocol.NAIVE -> {
-                base += "username" to profile.username
-                base += "password" to profile.password
+            Protocol.HTTP -> {
+                o.put("type", "http")
+                o.put("server", profile.address)
+                o.put("server_port", profile.port)
+                if (profile.username.isNotBlank()) o.put("username", profile.username)
+                if (profile.password.isNotBlank()) o.put("password", profile.password)
+                attachTls(o, profile)
             }
 
-            Protocol.CUSTOM, Protocol.DIRECT -> Unit
+            Protocol.CUSTOM -> {
+                val parsed = JSONObject(profile.customConfig)
+                return parsed.put("tag", tag)
+            }
         }
-
-        if (supportsMux && settings.tcpMux) {
-            base += "multiplex" to mapOf(
-                "enabled" to true,
-                "protocol" to "h2mux",
-                "max_connections" to 4,
-                "padding" to settings.tcpMuxPadding,
-            )
-        }
-
-        if (settings.tcpFastOpen) base += "tcp_fast_open" to true
-
-        if (profile.transport.type != "tcp" && profile.transport.type.isNotBlank()) {
-            base += "transport" to transportMap(profile)
-        }
-
-        if (profile.tls.enabled) {
-            base += "tls" to tlsMap(profile)
-        }
-
-        return base.toMap()
+        return o
     }
 
-    private fun transportMap(profile: Profile): Map<String, Any?> {
-        val t = profile.transport
-        val fields = mutableListOf<Pair<String, Any?>>("type" to t.type)
-        when (t.type) {
-            "ws", "httpupgrade" -> {
-                if (t.path.isNotBlank()) fields += "path" to t.path
-                if (t.host.isNotBlank()) {
-                    fields += if (t.type == "httpupgrade") {
-                        "host" to t.host
-                    } else {
-                        "headers" to mapOf("Host" to t.host)
+    private fun attachTls(target: JSONObject, p: Profile, forceTls: Boolean = false) {
+        val wantTls = forceTls || p.tls == "tls" || p.tls == "reality"
+        if (!wantTls) return
+        val tls = JSONObject().apply {
+            put("enabled", true)
+            val sni = p.sni.ifBlank { p.address }
+            if (sni.isNotBlank()) put("server_name", sni)
+            if (p.allowInsecure) put("insecure", true)
+            if (p.alpn.isNotBlank()) {
+                put("alpn", JSONArray(p.alpn.split(",").map { it.trim() }.filter { it.isNotEmpty() }))
+            }
+            if (p.fingerprint.isNotBlank()) {
+                put(
+                    "utls",
+                    JSONObject().apply {
+                        put("enabled", true)
+                        put("fingerprint", p.fingerprint)
+                    },
+                )
+            }
+            if (p.tls == "reality" && p.realityPublicKey.isNotBlank()) {
+                put(
+                    "reality",
+                    JSONObject().apply {
+                        put("enabled", true)
+                        put("public_key", p.realityPublicKey)
+                        if (p.realityShortId.isNotBlank()) put("short_id", p.realityShortId)
+                    },
+                )
+            }
+        }
+        target.put("tls", tls)
+    }
+
+    private fun attachTransport(target: JSONObject, p: Profile) {
+        when (p.transport) {
+            "ws" -> target.put(
+                "transport",
+                JSONObject().apply {
+                    put("type", "ws")
+                    if (p.wsPath.isNotBlank()) put("path", p.wsPath)
+                    if (p.wsHost.isNotBlank()) {
+                        put("headers", JSONObject().put("Host", p.wsHost))
                     }
-                }
-                if (t.type == "ws" && t.maxEarlyData > 0) {
-                    fields += "max_early_data" to t.maxEarlyData
-                    fields += "early_data_header_name" to t.earlyDataHeader.ifBlank { "Sec-WebSocket-Protocol" }
-                }
-            }
+                },
+            )
 
-            "http" -> {
-                if (t.path.isNotBlank()) fields += "path" to t.path
-                if (t.host.isNotBlank()) fields += "host" to listOf(t.host)
-            }
+            "grpc" -> target.put(
+                "transport",
+                JSONObject().apply {
+                    put("type", "grpc")
+                    if (p.grpcServiceName.isNotBlank()) put("service_name", p.grpcServiceName)
+                },
+            )
 
-            "grpc" -> {
-                if (t.serviceName.isNotBlank()) fields += "service_name" to t.serviceName
-            }
+            "http" -> target.put(
+                "transport",
+                JSONObject().apply {
+                    put("type", "http")
+                    if (p.wsPath.isNotBlank()) put("path", p.wsPath)
+                    if (p.wsHost.isNotBlank()) {
+                        put("host", JSONArray(p.wsHost.split(",").map { it.trim() }))
+                    }
+                },
+            )
+
+            "httpupgrade" -> target.put(
+                "transport",
+                JSONObject().apply {
+                    put("type", "httpupgrade")
+                    if (p.wsPath.isNotBlank()) put("path", p.wsPath)
+                    if (p.wsHost.isNotBlank()) put("host", p.wsHost)
+                },
+            )
         }
-        return fields.toMap()
     }
 
-    private fun tlsMap(profile: Profile): Map<String, Any?> {
-        val tls = profile.tls
-        val fields = mutableListOf<Pair<String, Any?>>("enabled" to true)
-        if (tls.serverName.isNotBlank()) fields += "server_name" to tls.serverName
-        if (tls.insecure) fields += "insecure" to true
-        if (tls.alpn.isNotEmpty()) fields += "alpn" to tls.alpn
-        if (tls.minVersion.isNotBlank()) fields += "min_version" to tls.minVersion
-        if (tls.maxVersion.isNotBlank()) fields += "max_version" to tls.minVersion
-
-        if (tls.reality) {
-            fields += "reality" to mapOf(
-                "enabled" to true,
-                "public_key" to tls.realityPublicKey,
-                "short_id" to tls.realityShortId,
-            )
+    /** Basic sanity check so broken profiles fail fast with a clear message. */
+    fun validate(config: String): String? = try {
+        val root = JSONObject(config)
+        val outbounds = root.optJSONArray("outbounds")
+        if (outbounds == null || outbounds.length() == 0) {
+            "no outbounds defined"
+        } else {
+            val first = outbounds.getJSONObject(0)
+            val type = first.optString("type")
+            if (type.isBlank()) {
+                "outbound type is missing"
+            } else if (type != "direct" && type != "selector" && type != "urltest") {
+                val server = first.optString("server")
+                val port = first.optInt("server_port", 0)
+                if (server.isNotBlank() && port !in 1..65535) {
+                    "server port must be between 1 and 65535"
+                } else null
+            } else null
         }
-        if (tls.utls || tls.reality) {
-            fields += "utls" to mapOf(
-                "enabled" to true,
-                "fingerprint" to tls.utlsFingerprint.ifBlank { "chrome" },
-            )
-        }
-        return fields.toMap()
+    } catch (e: Exception) {
+        e.message ?: "invalid JSON"
     }
 }

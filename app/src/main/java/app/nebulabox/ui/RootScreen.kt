@@ -6,7 +6,10 @@ import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -17,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +41,7 @@ import app.nebulabox.ui.screens.LogsScreen
 import app.nebulabox.ui.screens.ProfileEditSheet
 import app.nebulabox.ui.screens.ProfilesScreen
 import app.nebulabox.ui.screens.SettingsScreen
+import app.nebulabox.util.AppLogger
 
 private object Tab {
     const val HOME = "home"
@@ -56,6 +61,7 @@ fun RootScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showEditor by rememberSaveable { mutableStateOf(false) }
     val context = LocalContext.current
+    val crashes by AppLogger.crashes.collectAsState()
 
     LaunchedEffect(Unit) {
         viewModel.snacks.collect { snackbarHostState.showSnackbar(it) }
@@ -97,7 +103,19 @@ fun RootScreen(
                 NavigationBarItem(
                     selected = currentRoute == Tab.LOGS,
                     onClick = { navController.goTo(Tab.LOGS) },
-                    icon = { Icon(Icons.Filled.Terminal, null) },
+                    icon = {
+                        BadgedBox(
+                            badge = {
+                                if (crashes.isNotEmpty()) {
+                                    Badge(containerColor = MaterialTheme.colorScheme.error) {
+                                        Text(crashes.size.toString())
+                                    }
+                                }
+                            },
+                        ) {
+                            Icon(Icons.Filled.Terminal, null)
+                        }
+                    },
                     label = { Text(stringResource(R.string.tab_logs)) },
                 )
                 NavigationBarItem(

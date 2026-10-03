@@ -20,8 +20,9 @@ import app.nebulabox.data.ProfileStore
 import app.nebulabox.data.SettingsStore
 import app.nebulabox.engine.Engines
 import app.nebulabox.engine.TunProvider
-import app.nebulabox.engine.TunnelStatus
 import app.nebulabox.engine.TunnelState
+import app.nebulabox.engine.TunnelStatus
+import app.nebulabox.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,12 +32,11 @@ import kotlinx.coroutines.launch
 
 /**
  * Owns the Android VPN session and hands the resulting tun descriptor to the
- * tunnel engine. Everything protocol specific lives in the engine; this class
- * only deals with the Android side of the contract.
+ * tunnel engine.
  */
 class TunnelVpnService : VpnService(), TunProvider {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var profileStore: ProfileStore
     private lateinit var settingsStore: SettingsStore
     private var interfaceFd: ParcelFileDescriptor? = null
@@ -50,6 +50,7 @@ class TunnelVpnService : VpnService(), TunProvider {
         Engines.tunProvider = this
         profileStore = ProfileStore(this)
         settingsStore = SettingsStore(this)
+        AppLogger.i(TAG, "TunnelVpnService.onCreate")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -61,18 +62,20 @@ class TunnelVpnService : VpnService(), TunProvider {
 
             Actions.ACTION_DISCONNECT -> stopTunnel()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
     private suspend fun connect(profileId: String?) {
+        AppLogger.i(TAG, "connect requested (profileId=$profileId)")
         val settings: AppSettings = settingsStore.current()
         val known = profileStore.all()
         val profile: Profile? = if (profileId != null) {
             known.firstOrNull { it.id == profileId }
         } else {
             settings.selectedProfileId?.let { id -> known.firstOrNull { it.id == id } }
+                ?: known.firstOrNull()
         }
 
         if (profile == null) {
@@ -81,12 +84,16 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
 
         val config = runCatching { ConfigBuilder.build(profile, settings) }.getOrElse {
+            AppLogger.e(TAG, "ConfigBuilder.build failed", it)
             stopWithMessage(getString(R.string.error_config, it.message ?: "?"))
             return
         }
 
+        AppLogger.recordGeneratedConfig(config)
+
         val problem = ConfigBuilder.validate(config)
         if (problem != null) {
+            AppLogger.e(TAG, "ConfigBuilder.validate failed: $problem")
             stopWithMessage(getString(R.string.error_config, problem))
             return
         }
@@ -97,35 +104,53 @@ class TunnelVpnService : VpnService(), TunProvider {
         val engine = Engines.obtain()
         try {
             engine.start(activeProfileName, config, settings.mtu) { openTun(settings) }
+            showNotification(getString(R.string.status_started) + " · " + activeProfileName)
             logJob?.cancel()
             logJob = scope.launch {
                 engine.logs.collect { line ->
                     Log.println(priorityOf(line.level), "NebulaBox", line.message)
+                    val lvl = when (line.level) {
+                        5, 6, 7 -> AppLogger.Level.ERROR
+                        4 -> AppLogger.Level.WARN
+                        2 -> AppLogger.Level.DEBUG
+                        else -> AppLogger.Level.INFO
+                    }
+                    AppLogger.log(lvl, "sing-box", line.message)
                 }
             }
             acquireWakeLock()
-        } catch (e: Exception) {
+            AppLogger.i(TAG, "Tunnel connected: $activeProfileName")
+        } catch (e: Throwable) {
+            AppLogger.e(TAG, "Tunnel start failed: ${e.message}", e)
             stopWithMessage(e.message ?: getString(R.string.error_start))
         }
     }
 
     /**
      * Builds the Android VPN session. Returns true once a tun descriptor exists
-     * for the engine to take ownership of via [tunFileDescriptor].
+     * for the engine to duplicate via [tunFileDescriptor].
      */
     private fun openTun(settings: AppSettings): Boolean {
+        if (prepare(this) != null) {
+            AppLogger.e(TAG, "VPN permission not granted in openTun")
+            return false
+        }
+
         val builder = Builder()
             .setSession(activeProfileName.ifBlank { getString(R.string.app_name) })
             .setMtu(settings.mtu)
-            .setBlocking(false)
 
         if (settings.routeMode != "direct") {
             builder.addAddress("172.19.0.1", 30)
             builder.addRoute("0.0.0.0", 0)
+            builder.addDnsServer("172.19.0.2")
+        } else {
+            builder.addAddress("172.19.0.1", 30)
         }
         if (settings.ipv6) {
             builder.addAddress("fdfe:dcba:9876::1", 126)
             builder.addRoute("::", 0)
+            builder.addDnsServer("fdfe:dcba:9876::2")
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -156,28 +181,27 @@ class TunnelVpnService : VpnService(), TunProvider {
             sendBroadcast(Intent(Actions.ACTION_STATE_CHANGED).setPackage(packageName))
             true
         } catch (e: Exception) {
+            AppLogger.e(TAG, "builder.establish() failed", e)
             stopWithMessage(getString(R.string.error_tun) + ": " + e.message)
             false
         }
     }
 
     /**
-     * Detaches the tun descriptor for the engine. Ownership passes to the
-     * caller, which is why the field is cleared.
+     * Returns the raw file descriptor for the TUN interface.
+     * Note: sing-box `libbox` duplicates (`dup(fd)`) this descriptor internally,
+     * so we keep [interfaceFd] open until [stopTunnel] is called.
      */
-    override fun tunFileDescriptor(): Int {
-        val fd = interfaceFd?.detachFd() ?: -1
-        interfaceFd = null
-        return fd
-    }
+    override fun tunFileDescriptor(): Int = interfaceFd?.fd ?: -1
 
     override fun protectSocket(fd: Int): Boolean = protect(fd)
 
     private fun stopTunnel() {
+        AppLogger.i(TAG, "stopTunnel called")
         runCatching { Engines.active.value?.stop() }
         logJob?.cancel()
         logJob = null
-        interfaceFd?.close()
+        runCatching { interfaceFd?.close() }
         interfaceFd = null
         releaseWakeLock()
         isServiceAlive = false
@@ -187,7 +211,7 @@ class TunnelVpnService : VpnService(), TunProvider {
     }
 
     private fun stopWithMessage(message: String) {
-        Log.e(TAG, "tunnel failed: $message")
+        AppLogger.e(TAG, "tunnel stopped with error: $message")
         val engine = Engines.active.value
         if (engine != null) {
             engine.status.value = TunnelStatus(
@@ -197,14 +221,17 @@ class TunnelVpnService : VpnService(), TunProvider {
             )
         }
         showNotification(message, error = true)
-        interfaceFd?.close()
+        runCatching { interfaceFd?.close() }
         interfaceFd = null
         releaseWakeLock()
         sendBroadcast(Intent(Actions.ACTION_STATE_CHANGED).setPackage(packageName))
         stopSelf()
     }
 
-    override fun onRevoke() = stopTunnel()
+    override fun onRevoke() {
+        AppLogger.w(TAG, "VPN permission revoked by system")
+        stopTunnel()
+    }
 
     override fun onDestroy() {
         isServiceAlive = false

@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
 import app.nebulabox.locale.LocaleManager
+import app.nebulabox.util.AppLogger
 
 class Application : android.app.Application() {
 
@@ -15,6 +16,7 @@ class Application : android.app.Application() {
     override fun onCreate() {
         instance = this
         super.onCreate()
+        AppLogger.init(this)
         prefs = getSharedPreferences("nebula", Context.MODE_PRIVATE)
         LocaleManager.applyStoredLocale(this)
         createNotificationChannels()
