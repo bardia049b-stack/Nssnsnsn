@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.content.ContextCompat
 
-/** Commands the UI can send to the tunnel service. */
 object Actions {
     const val ACTION_CONNECT = "app.nebulabox.CONNECT"
     const val ACTION_DISCONNECT = "app.nebulabox.DISCONNECT"

@@ -33,25 +33,16 @@ data class GroupItem(
     val delayMs: Int = -1,
 )
 
-/**
- * The contract between the UI and the native Xray-core (`libv2ray.aar`) tunnel engine.
- */
 interface TunnelEngine {
 
     val status: MutableStateFlow<TunnelStatus>
     val groups: MutableStateFlow<List<OutboundGroup>>
     val logs: Flow<LogLine>
 
-    /** Human readable name of the implementation, shown in the About & Home screens. */
     val implementationName: String
 
-    /** Whether this build can actually establish a tunnel. */
     val functional: Boolean
 
-    /**
-     * Starts the tunnel. [openTun] is called on a worker thread and must return
-     * true once the Android VPN session exists and its descriptor is retrievable.
-     */
     fun start(profileName: String, config: String, mtu: Int, openTun: () -> Boolean)
 
     fun stop()
@@ -59,26 +50,17 @@ interface TunnelEngine {
     fun urlTest(groupTag: String)
     fun clearLogs()
 
-    /**
-     * Measures real HTTP delay (in ms) for an arbitrary Xray JSON config (no inbounds required),
-     * backed by `Libv2ray.measureOutboundDelay(config, testUrl)`. Returns -1L on failure.
-     */
     fun measureOutboundDelay(config: String, testUrl: String): Long = -1L
 
-    /**
-     * Measures real HTTP delay (in ms) through the currently running Xray instance,
-     * backed by `CoreController.measureDelay(testUrl)`. Returns -1L on failure.
-     */
     fun measureActiveDelay(testUrl: String): Long = -1L
 
     data class LogLine(val level: Int, val time: Long, val message: String)
 }
 
 interface TunProvider {
-    /** Returns the raw TUN file descriptor. */
+
     fun tunFileDescriptor(): Int
 
-    /** Routes a raw socket around the tunnel. */
     fun protectSocket(fd: Int): Boolean
 }
 

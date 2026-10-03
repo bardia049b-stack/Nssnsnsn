@@ -1,6 +1,6 @@
-package com.v2ray.ang.enums
+package app.nebulabox.core.enums
 
-enum class NetworkType(val type: String) {
+enum class TransportType(val type: String) {
     TCP("tcp"),
     KCP("kcp"),
     WS("ws"),
@@ -8,10 +8,7 @@ enum class NetworkType(val type: String) {
     XHTTP("xhttp"),
     HTTP("http"),
     H2("h2"),
-
-    //QUIC("quic"),
-    GRPC("grpc"),
-    HYSTERIA("hysteria");
+    GRPC("grpc");
 
     companion object {
         fun fromString(type: String?) = entries.find { it.type == type } ?: TCP

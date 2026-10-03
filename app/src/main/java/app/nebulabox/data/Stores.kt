@@ -30,7 +30,7 @@ class ProfileStore(private val context: Context) {
         runCatching { kjson.decodeFromString(profileListSerializer, raw) }
             .getOrDefault(emptyList())
             .map { p ->
-                // Normalize any untested profile that had legacy default -1 so it displays "" instead of "-1 ms"
+
                 if (p.lastTestedAt == 0L && p.lastDelayMs < 0) p.copy(lastDelayMs = 0) else p
             }
     }
@@ -132,10 +132,6 @@ class ProfileStore(private val context: Context) {
         }
     }
 
-    /**
-     * Sorts profiles by ping test results (fastest positive delay first, untested/failed at bottom),
-     * matching v2rayNG's SortByTestResults.
-     */
     suspend fun sortByTestResults() = write { list ->
         list.sortedWith(
             compareBy<Profile> { if (it.lastDelayMs > 0) 0 else 1 }
@@ -144,10 +140,6 @@ class ProfileStore(private val context: Context) {
         ).mapIndexed { idx, p -> p.copy(order = idx) }
     }
 
-    /**
-     * Removes duplicate profiles based on [Profile.duplicateKey], matching v2rayNG's DeleteDuplicate.
-     * @return Number of duplicates removed.
-     */
     suspend fun removeDuplicates(): Int {
         var removedCount = 0
         write { list ->
@@ -165,11 +157,6 @@ class ProfileStore(private val context: Context) {
         return removedCount
     }
 
-    /**
-     * Removes invalid/timed-out profiles (where lastDelayMs < 0 after being tested),
-     * matching v2rayNG's DeleteInvalid.
-     * @return Number of invalid profiles removed.
-     */
     suspend fun removeInvalid(): Int {
         var removedCount = 0
         write { list ->

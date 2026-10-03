@@ -15,20 +15,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Centralised log and crash manager for NebulaBox.
- *
- * Responsibilities:
- *  1. Captures uncaught JVM/Kotlin exceptions via [Thread.setDefaultUncaughtExceptionHandler]
- *     and persists full crash reports to `filesDir/crash_logs/`.
- *  2. Archives native Go (`libbox.so`) stderr crash reports (`CrashReport-*.log`) on startup
- *     before `Libbox.setup()` truncates them.
- *  3. Records structured step-by-step application and tunnel lifecycle logs (`INFO`, `WARN`, `ERROR`)
- *     both in-memory ([logs]) and to `filesDir/app_debug.log`.
- *  4. Stores the last generated sing-box JSON configuration (`last_config.json`) for inspection
- *     in the Debug screen.
- *  5. Reads the process's own Android `logcat` buffer on demand.
- */
 object AppLogger {
 
     enum class Level(val code: Int, val label: String) {
@@ -85,21 +71,16 @@ object AppLogger {
             logFile = File(appContext.filesDir, "app_debug.log")
             lastConfigFile = File(appContext.filesDir, "last_config.json")
 
-            // Load persisted last config if present
             runCatching {
                 if (lastConfigFile.exists()) {
                     _lastGeneratedConfig.value = lastConfigFile.readText()
                 }
             }
 
-            // IMPORTANT: Archive any non-empty native Go CrashReport-*.log files BEFORE Libbox.setup()
-            // redirects stderr and overwrites them.
             archiveNativeGoCrashReports()
 
-            // Install JVM uncaught exception handler
             installUncaughtExceptionHandler()
 
-            // Refresh crash list state
             refreshNativeCrashes()
 
             initialized = true
@@ -183,10 +164,6 @@ object AppLogger {
         refreshNativeCrashes()
     }
 
-    /**
-     * Checks both `filesDir` and `externalFilesDir` for non-empty `CrashReport-*.log` files
-     * written by Go's `redirectStderr` in `libbox.so`.
-     */
     fun archiveNativeGoCrashReports() {
         if (!::crashDir.isInitialized) return
         runCatching {
@@ -226,7 +203,6 @@ object AppLogger {
         runCatching {
             val list = mutableListOf<CrashReport>()
 
-            // 1. Check live CrashReport-*.log files in case stderr was written during the session
             for (dir in getCandidateNativeDirs()) {
                 val files = dir.listFiles() ?: continue
                 for (file in files) {
@@ -245,7 +221,6 @@ object AppLogger {
                 }
             }
 
-            // 2. Load archived crash files
             val archived = crashDir.listFiles()
                 ?.filter { it.isFile && it.name.endsWith(".log") }
                 ?.sortedByDescending { it.lastModified() }
@@ -299,7 +274,7 @@ object AppLogger {
     }
 
     fun deviceInfoHeader(): String = buildString {
-        appendLine("App: NebulaBox v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+        appendLine("App: JavidTun v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
         appendLine("Engine Compiled: ${BuildConfig.HAS_ENGINE}")
         appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.PRODUCT})")
         appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")

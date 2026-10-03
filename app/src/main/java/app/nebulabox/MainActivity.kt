@@ -88,7 +88,6 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch { viewModel.consumePendingImport() }
     }
 
-    /** The permission dialog must be launched from an activity, so route it here. */
     private fun observeVpnRequests() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -99,7 +98,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Accepts vless:// style links and plain text shared from other apps. */
     private fun handleIncomingShare(intent: Intent?) {
         intent ?: return
         val text = when (intent.action) {

@@ -23,7 +23,7 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:localeConfig="@xml/locales_config"
-        android:theme="@style/Theme.NebulaBox">
+        android:theme="@style/Theme.JavidTun">
 
         <activity
             android:name=".MainActivity"
@@ -36,7 +36,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- Import share links: vless:// vmess:// trojan:// ss:// ssh:// hysteria2:// tuic:// wireguard:// -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />

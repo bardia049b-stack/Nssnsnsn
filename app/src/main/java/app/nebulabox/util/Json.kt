@@ -1,13 +1,5 @@
 package app.nebulabox.util
 
-/**
- * A deliberately tiny JSON reader/writer.
- *
- * The app needs to emit sing-box configuration and to read fragments of
- * vmess:// payloads. A full JSON tree library costs method count and APK
- * size, so this covers objects, arrays, strings, numbers, booleans and
- * null and nothing else.
- */
 object Json {
 
     fun escape(value: String): String {
@@ -27,7 +19,6 @@ object Json {
 
     fun quote(value: String): String = "\"" + escape(value) + "\""
 
-    /** Renders pairs as a JSON object, dropping null values. */
     fun obj(vararg pairs: Pair<String, Any?>): String {
         val parts = pairs.filter { it.second != null }
             .map { (k, v) -> quote(k) + ":" + any(v!!) }
@@ -46,8 +37,6 @@ object Json {
         is Array<*> -> value.joinToString(",", "[", "]") { any(it) }
         else -> quote(value.toString())
     }
-
-    // ------------------------------------------------------------- parsing
 
     fun miniMap(text: String): Map<String, Any?> {
         val value = parse(text)

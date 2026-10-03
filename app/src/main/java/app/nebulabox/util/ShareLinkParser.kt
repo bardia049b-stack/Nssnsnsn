@@ -9,16 +9,6 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.UUID
 
-/**
- * Parses and formats share links and custom JSON configurations used by v2rayNG, Xray-core, and sing-box.
- *
- * Supported:
- *  - vless://, vmess://, trojan://, ss://, socks://, socks5://, http(s)://,
- *    hysteria2://, hy2://, tuic://, wireguard://, wg://, ssh://
- *  - Base64-encoded subscription payloads containing multiple share links
- *  - Full Xray / v2rayNG JSON configs, single Xray outbound JSON objects,
- *    and sing-box JSON configs.
- */
 object ShareLinkParser {
 
     class ParseException(message: String) : Exception(message)
@@ -40,17 +30,10 @@ object ShareLinkParser {
             t.startsWith("{") || t.startsWith("[")
     }
 
-    /**
-     * Parses pasted text that may be:
-     *  1. A full Xray or sing-box JSON object `{ ... }` or array `[ ... ]`
-     *  2. One or more share links (newline-separated or space-separated)
-     *  3. A Base64-encoded subscription body containing share links or JSON
-     */
     fun parseMany(text: String): List<Profile> {
         val trimmed = text.trim().removePrefix("\uFEFF")
         if (trimmed.isEmpty()) return emptyList()
 
-        // 1. Check if the whole input is a JSON object or JSON array
         if (trimmed.startsWith("{")) {
             runCatching { return parseJsonDocument(trimmed) }
         }
@@ -61,7 +44,6 @@ object ShareLinkParser {
             }
         }
 
-        // 2. Parse line by line (preserving spaces inside #remarks)
         val out = mutableListOf<Profile>()
         val rawLines = trimmed.lines().map { it.trim() }.filter { it.isNotEmpty() }
         for (line in rawLines) {
@@ -74,7 +56,6 @@ object ShareLinkParser {
         }
         if (out.isNotEmpty()) return out
 
-        // 3. Fallback: try decoding the whole payload as Base64 (subscription content)
         val decoded = decodeBase64ToString(trimmed)?.trim()
         if (!decoded.isNullOrEmpty() && decoded != trimmed) {
             if (decoded.startsWith("{") || decoded.startsWith("[") ||
@@ -111,11 +92,6 @@ object ShareLinkParser {
         }
     }
 
-    // --------------------------------------------------------- URI Formatting (Export / Share / QR)
-
-    /**
-     * Converts a [Profile] to a standard v2rayNG-compatible share URI string (or raw JSON for CUSTOM).
-     */
     fun toShareUri(profile: Profile): String {
         val hostFormatted = if (profile.server.contains(":") && !profile.server.startsWith("[")) {
             "[${profile.server}]"
@@ -298,8 +274,6 @@ object ShareLinkParser {
         return "?" + q.entries.joinToString("&") { (k, v) -> "$k=${encode(v)}" }
     }
 
-    // ---------------------------------------------------------------- vless
-
     private fun parseVless(link: String): Profile {
         val rest = stripScheme(link)
         val (authority, query) = splitQuery(rest)
@@ -373,8 +347,6 @@ object ShareLinkParser {
             tls = tls,
         )
     }
-
-    // ---------------------------------------------------------------- vmess
 
     private fun parseVmess(link: String): Profile {
         val payload = stripScheme(link).trim()
@@ -466,8 +438,6 @@ object ShareLinkParser {
         )
     }
 
-    // --------------------------------------------------------------- trojan
-
     private fun parseTrojan(link: String): Profile {
         val rest = stripScheme(link)
         val (authority, query) = splitQuery(rest)
@@ -528,8 +498,6 @@ object ShareLinkParser {
         )
     }
 
-    // ------------------------------------------------------------------- ss
-
     private fun parseSs(link: String): List<Profile> {
         val rest = stripScheme(link)
         val (authority, query) = splitQuery(rest)
@@ -580,8 +548,6 @@ object ShareLinkParser {
         }
     }
 
-    // ---------------------------------------------------------------- socks
-
     private fun parseSocks(link: String): Profile {
         val rest = stripScheme(link)
         val (authority, query) = splitQuery(rest)
@@ -627,8 +593,6 @@ object ShareLinkParser {
         )
     }
 
-    // ------------------------------------------------------------ hysteria2
-
     private fun parseHysteria2(link: String): Profile {
         val rest = stripScheme(link)
         val (authority, query) = splitQuery(rest)
@@ -656,8 +620,6 @@ object ShareLinkParser {
         )
     }
 
-    // ----------------------------------------------------------------- tuic
-
     private fun parseTuic(link: String): Profile {
         val rest = stripScheme(link)
         val (authority, query) = splitQuery(rest)
@@ -684,8 +646,6 @@ object ShareLinkParser {
         )
     }
 
-    // ------------------------------------------------------------ wireguard
-
     private fun parseWireGuard(link: String): Profile {
         val rest = stripScheme(link)
         val (authority, query) = splitQuery(rest)
@@ -711,8 +671,6 @@ object ShareLinkParser {
                 ?: emptyList(),
         )
     }
-
-    // ------------------------------------------------------------------ ssh
 
     private fun parseSsh(link: String): Profile {
         val rest = stripScheme(link)
@@ -756,8 +714,6 @@ object ShareLinkParser {
         )
     }
 
-    // ------------------------------------------------------- custom / xray / sing-box json
-
     private fun parseJsonArray(json: String): List<Profile> {
         val result = mutableListOf<Profile>()
         val elements = runCatching {
@@ -766,7 +722,7 @@ object ShareLinkParser {
         if (elements != null) {
             for (el in elements) {
                 if (!el.isJsonObject) continue
-                val itemJson = com.v2ray.ang.util.JsonUtil.toJsonPretty(el.asJsonObject) ?: el.toString()
+                val itemJson = app.nebulabox.core.serializer.JsonSerializer.toJsonPretty(el.asJsonObject) ?: el.toString()
                 runCatching { result.addAll(parseJsonDocument(itemJson)) }
             }
             if (result.isNotEmpty()) return result
@@ -785,19 +741,15 @@ object ShareLinkParser {
         val root = Json.miniMap(trimmed)
         if (root.isEmpty()) throw ParseException("invalid JSON document")
 
-        // Matches v2rayNG 2.3.10 CustomFmt.parse + AngConfigManager.parseCustomConfigServer:
-        // Always store imported JSON configs as Protocol.CUSTOM with the full raw JSON preserved,
-        // so custom inbounds (mixed-in/dns-in), outbounds (fragment/warp/proxy), finalmask, ECH,
-        // dns.hosts, and routing rules are never stripped.
-        val v2rayConfig = com.v2ray.ang.util.JsonUtil.fromJsonSafe(
+        val coreConfig = app.nebulabox.core.serializer.JsonSerializer.fromJsonSafe(
             trimmed,
-            com.v2ray.ang.dto.V2rayConfig::class.java,
+            app.nebulabox.core.model.CoreConfig::class.java,
         )
-        val proxyOutbound = v2rayConfig?.getProxyOutbound()
+        val proxyOutbound = coreConfig?.getProxyOutbound()
         if (proxyOutbound != null) {
             val srvAddr = proxyOutbound.getServerAddress().orEmpty()
             val srvPort = proxyOutbound.getServerPort() ?: 0
-            val remarks = v2rayConfig.remarks
+            val remarks = coreConfig.remarks
                 ?.takeIf { it.isNotBlank() }
                 ?: proxyOutbound.tag.takeIf { it !in setOf("proxy", "out", "direct") }
                 ?: if (srvAddr.isNotBlank()) {
@@ -991,8 +943,6 @@ object ShareLinkParser {
             ),
         )
     }
-
-    // ------------------------------------------------------------- helpers
 
     fun extractWsEarlyData(
         rawPath: String,

@@ -9,13 +9,6 @@ import androidx.core.os.LocaleListCompat
 import app.nebulabox.Application
 import java.util.Locale
 
-/**
- * Language switching.
- *
- * On API 33+ the per-app language API is used so the system settings screen
- * reflects the choice. Below that the configuration is overridden on the
- * activity, which is why [wrap] is called from the base activity.
- */
 object LocaleManager {
 
     private const val KEY_LANGUAGE = "language"
@@ -47,7 +40,6 @@ object LocaleManager {
         }
     }
 
-    /** Wraps a context so resources resolve to the chosen language pre API 33. */
     @Suppress("DEPRECATION")
     fun wrap(context: Context): Context {
         val code = storedLanguage()
@@ -62,7 +54,6 @@ object LocaleManager {
         return context.createConfigurationContext(config)
     }
 
-    /** True when the effective language is right to left, used by the theme. */
     fun isRtl(context: Context): Boolean {
         val code = storedLanguage()
         return if (code == SYSTEM) {

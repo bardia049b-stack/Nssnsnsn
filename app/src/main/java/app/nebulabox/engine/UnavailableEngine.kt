@@ -5,13 +5,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/**
- * Used when the APK was assembled without the sing-box native core.
- *
- * It never claims to be connected: the UI shows the reason and the About
- * screen explains how to build the core, so a user is never misled into
- * thinking their traffic is protected when it is not.
- */
 class UnavailableEngine(private val detail: String?) : TunnelEngine {
 
     override val status = MutableStateFlow(TunnelStatus())

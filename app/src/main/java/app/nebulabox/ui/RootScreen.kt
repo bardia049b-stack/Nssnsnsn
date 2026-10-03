@@ -1,6 +1,5 @@
 package app.nebulabox.ui
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Badge
 import androidx.compose.material3.DrawerValue
@@ -45,10 +45,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import androidx.navigation.compose.NavHost
@@ -71,9 +71,6 @@ private object Route {
     const val LOGS = "logs"
 }
 
-/**
- * Root navigation modeled directly on `v2rayNG 2.3.10` (`MainScreen.kt` + `MainDrawer.kt`).
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RootScreen(
@@ -117,43 +114,56 @@ fun RootScreen(
         drawerContent = {
             ModalDrawerSheet(
                 drawerState = drawerState,
-                modifier = Modifier.fillMaxWidth(0.75f),
+                modifier = Modifier.fillMaxWidth(0.76f),
                 drawerContainerColor = MaterialTheme.colorScheme.surface,
             ) {
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                 ) {
-                    // Exact v2rayNG 2.3.10 MainDrawerContent Header
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(168.dp),
-                        color = MaterialTheme.colorScheme.surface,
+                            .padding(horizontal = 16.dp, vertical = 20.dp),
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
                     ) {
-                        Column(
+                        Row(
                             modifier = Modifier
-                                .fillMaxSize()
-                                .padding(8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center,
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 18.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.ic_launcher_foreground),
-                                contentDescription = null,
-                                modifier = Modifier.size(72.dp),
-                                contentScale = ContentScale.Crop,
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = viewModel.activeEngine?.implementationName ?: "Xray-core",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(48.dp),
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        painter = painterResource(id = R.drawable.ic_javid_logo),
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onPrimary,
+                                        modifier = Modifier.size(26.dp),
+                                    )
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = stringResource(R.string.app_name),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                )
+                                Spacer(Modifier.height(2.dp))
+                                Text(
+                                    text = viewModel.activeEngine?.implementationName ?: "JavidTun Core",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
-
-                    AppDivider()
-                    Spacer(Modifier.height(8.dp))
 
                     NavigationDrawerItem(
                         label = { Text("Servers") },
@@ -172,7 +182,7 @@ fun RootScreen(
                     )
 
                     NavigationDrawerItem(
-                        label = { Text("Subscription group setting") },
+                        label = { Text("Subscriptions") },
                         selected = false,
                         onClick = {
                             scope.launch { drawerState.close() }
@@ -189,7 +199,7 @@ fun RootScreen(
                     )
 
                     NavigationDrawerItem(
-                        label = { Text("Per-app proxy") },
+                        label = { Text("Per-App Proxy") },
                         selected = false,
                         onClick = {
                             scope.launch { drawerState.close() }
@@ -205,7 +215,7 @@ fun RootScreen(
                     )
 
                     NavigationDrawerItem(
-                        label = { Text("Routing setting") },
+                        label = { Text("Routing & Fragment") },
                         selected = false,
                         onClick = {
                             scope.launch { drawerState.close() }
@@ -237,13 +247,13 @@ fun RootScreen(
                     )
 
                     Spacer(Modifier.height(8.dp))
-                    AppDivider()
+                    AppDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     Spacer(Modifier.height(8.dp))
 
                     NavigationDrawerItem(
                         label = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Logcat")
+                                Text("Logs & Diagnostics")
                                 if (crashes.isNotEmpty()) {
                                     Spacer(Modifier.width(8.dp))
                                     Badge(containerColor = MaterialTheme.colorScheme.error) {
@@ -271,6 +281,7 @@ fun RootScreen(
     ) {
         Scaffold(
             snackbarHost = { SnackbarHost(snackbarHostState) },
+            containerColor = MaterialTheme.colorScheme.background,
         ) { padding ->
             Box(Modifier.padding(padding)) {
                 NavHost(
@@ -309,7 +320,7 @@ fun RootScreen(
 
                     composable(Route.LOGS) {
                         SubScreenScaffold(
-                            title = "Logcat",
+                            title = "Logs & Diagnostics",
                             onBack = { navController.popBackStack() },
                         ) {
                             LogsScreen(viewModel)
@@ -325,6 +336,7 @@ fun RootScreen(
         ModalBottomSheet(
             onDismissRequest = { showEditor = false },
             sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surface,
         ) {
             ProfileEditSheet(
                 initial = viewModel.draftProfile,
@@ -347,7 +359,13 @@ private fun SubScreenScaffold(
 ) {
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text(title) },
+            title = {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+            },
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(
@@ -357,12 +375,11 @@ private fun SubScreenScaffold(
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = MaterialTheme.colorScheme.surface,
-                titleContentColor = MaterialTheme.colorScheme.onSurface,
-                navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                containerColor = MaterialTheme.colorScheme.background,
+                titleContentColor = MaterialTheme.colorScheme.onBackground,
+                navigationIconContentColor = MaterialTheme.colorScheme.onBackground,
             ),
         )
-        AppDivider()
         Box(Modifier.fillMaxSize()) {
             content()
         }

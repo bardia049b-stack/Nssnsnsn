@@ -35,23 +35,6 @@
           "quic"
         ]
       }
-    },
-    {
-      "tag": "tun",
-      "protocol": "tun",
-      "settings": {
-        "name": "xray0",
-        "MTU": 1500,
-        "userLevel": 8
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": [
-          "http",
-          "tls",
-          "quic"
-        ]
-      }
     }
   ],
   "outbounds": [
@@ -59,7 +42,7 @@
       "tag": "proxy",
       "protocol": "vmess",
       "settings": {
-        "address": "v2ray.cool",
+        "address": "example.com",
         "port": 10086
       },
       "streamSettings": {

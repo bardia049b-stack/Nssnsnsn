@@ -1,27 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">نبیولا‌باکس</string>
+    <string name="app_name">جاوید تانل</string>
 
-    <!-- tabs -->
     <string name="tab_home">خانه</string>
-    <string name="tab_profiles">پروفایل‌ها</string>
+    <string name="tab_profiles">سرورها</string>
     <string name="tab_logs">گزارش‌ها</string>
     <string name="tab_settings">تنظیمات</string>
 
-    <!-- status -->
     <string name="status_stopped">قطع</string>
     <string name="status_starting">در حال اتصال…</string>
     <string name="status_started">متصل</string>
     <string name="status_stopping">در حال قطع…</string>
-    <string name="no_profile_selected">پروفایلی انتخاب نشده</string>
+    <string name="no_profile_selected">سروری انتخاب نشده</string>
 
-    <!-- actions -->
     <string name="action_connect">اتصال</string>
     <string name="action_disconnect">قطع اتصال</string>
-    <string name="action_change_profile">تغییر پروفایل</string>
+    <string name="action_change_profile">تغییر سرور</string>
     <string name="action_manage">مدیریت</string>
     <string name="action_groups">گروه‌های پروکسی</string>
-    <string name="action_new_profile">پروفایل جدید</string>
+    <string name="action_new_profile">سرور جدید</string>
     <string name="action_edit">ویرایش</string>
     <string name="action_delete">حذف</string>
     <string name="action_save">ذخیره</string>
@@ -31,27 +28,24 @@
     <string name="action_url_test">سنجش تأخیر</string>
     <string name="action_clear_logs">پاک کردن گزارش‌ها</string>
 
-    <!-- traffic -->
     <string name="title_traffic">ترافیک</string>
     <string name="label_uplink">آپلود</string>
     <string name="label_downlink">دانلود</string>
     <string name="label_uptime">مدت اتصال</string>
     <string name="label_memory">حافظه</string>
     <string name="label_connections">اتصال ورودی/خروجی</string>
-    <string name="label_profile_count">%1$d پروفایل</string>
+    <string name="label_profile_count">%1$d سرور</string>
 
-    <!-- profiles -->
-    <string name="empty_profiles_title">هنوز پروفایلی ندارید</string>
+    <string name="empty_profiles_title">هنوز سروری ندارید</string>
     <string name="empty_profiles_body">یک لینک اشتراک یا کانفیگ JSON سفارشی وارد کنید یا سرور را دستی اضافه نمایید.</string>
-    <string name="import_hint">یک یا چند لینک (vless://، vmess://، trojan://، ss://، hysteria2://، tuic://، wireguard:// و…) یا کانفیگ کامل Custom JSON ({ … }) را بچسبانید.</string>
+    <string name="import_hint">یک یا چند لینک یا کانفیگ کامل Custom JSON ({ … }) را بچسبانید.</string>
     <string name="import_label">لینک کانفیگ یا Custom JSON</string>
     <string name="import_failed">این لینک یا کانفیگ JSON قابل پردازش نبود</string>
     <plurals name="profiles_imported">
-        <item quantity="one">%1$d پروفایل وارد شد</item>
-        <item quantity="other">%1$d پروفایل وارد شد</item>
+        <item quantity="one">%1$d سرور وارد شد</item>
+        <item quantity="other">%1$d سرور وارد شد</item>
     </plurals>
 
-    <!-- fields -->
     <string name="field_name">نام</string>
     <string name="field_protocol">پروتکل</string>
     <string name="field_server">سرور</string>
@@ -66,9 +60,8 @@
     <string name="field_tls">TLS</string>
     <string name="field_sni">نام سرور (SNI)</string>
     <string name="field_insecure">اجازهٔ گواهی نامعتبر</string>
-    <string name="field_custom_json">کانفیگ Custom JSON (سینگ‌باکس یا Outbound)</string>
+    <string name="field_custom_json">کانفیگ Custom JSON</string>
 
-    <!-- settings -->
     <string name="section_appearance">ظاهر</string>
     <string name="section_routing">مسیریابی</string>
     <string name="section_dns">DNS</string>
@@ -109,20 +102,18 @@
     <string name="about_engine_state">وضعیت موتور</string>
     <string name="engine_ready">آماده</string>
 
-    <!-- errors -->
-    <string name="error_no_profile">هیچ پروفایلی انتخاب نشده است</string>
+    <string name="error_no_profile">هیچ سروری انتخاب نشده است</string>
     <string name="error_config">خطای پیکربندی: %1$s</string>
     <string name="error_tun">ساخت رابط VPN ناموفق بود</string>
     <string name="error_start">راه‌اندازی تونل ناموفق بود</string>
     <string name="error_no_engine">این نسخه موتور تونل ندارد</string>
 
     <string name="engine_missing_title">موتور تونل نصب نیست</string>
-    <string name="engine_missing_body">هستهٔ سینگ‌باکس جداگانه ساخته می‌شود و هنگام ساخت این APK موجود نبوده است. پروفایل‌ها و پیکربندی کار می‌کنند، اما هیچ ترافیکی تونل نمی‌شود.</string>
-    <string name="engine_missing_hint">اسکریپت scripts/build-libbox.sh را اجرا کنید، فایل libbox.aar را در app/libs بگذارید و دوباره بسازید.</string>
+    <string name="engine_missing_body">هستهٔ بومی هنگام ساخت این فایل موجود نبوده است.</string>
+    <string name="engine_missing_hint">فایل کتابخانهٔ هسته را در app/libs قرار دهید و دوباره بسازید.</string>
 
-    <string name="empty_groups">گروه پروکسی وجود ندارد. گروه‌ها زمانی دیده می‌شوند که به پروفایلی با outbound از نوع selector یا urltest متصل باشید.</string>
+    <string name="empty_groups">گروه پروکسی وجود ندارد.</string>
     <string name="empty_logs">هنوز گزارشی ثبت نشده است.</string>
 
-    <!-- notification -->
-    <string name="channel_tunnel">تونل</string>
+    <string name="channel_tunnel">جاوید تانل</string>
 </resources>

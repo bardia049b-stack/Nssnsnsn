@@ -38,14 +38,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Android [VpnService] aligned with `v2rayNG 2.3.10`'s `CoreVpnService` & `CoreServiceManager`:
- *  - Supports both `hev-socks5-tunnel` (`TProxyService` + Xray SOCKS5/HTTP inbound)
- *    and Xray-core Native TUN (`"protocol": "tun"` / gVisor)
- *  - Tracks upstream physical network via [ConnectivityManager.NetworkCallback] and updates
- *    [setUnderlyingNetworks] so cellular/Wi-Fi handovers work seamlessly
- *  - Performs non-blocking teardown on [Dispatchers.IO]
- */
 class TunnelVpnService : VpnService(), TunProvider {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -89,7 +81,7 @@ class TunnelVpnService : VpnService(), TunProvider {
     private suspend fun connect(profileId: String?) {
         AppLogger.i(TAG, "connect requested (profileId=$profileId)")
         val rawSettings: AppSettings = settingsStore.current().normalized()
-        // If hev-socks5-tunnel is requested but native lib isn't loaded, fall back to Xray Native TUN
+
         val settings = if (rawSettings.useHevTun && !TProxyService.isLoaded) {
             rawSettings.copy(useHevTun = false)
         } else {
@@ -132,7 +124,7 @@ class TunnelVpnService : VpnService(), TunProvider {
         val safeMtu = if (settings.mtu in 1280..1500) settings.mtu else 1500
         val engine = Engines.obtain()
         try {
-            // Stop any previous hev-socks5-tunnel session before starting
+
             TProxyService.stop()
 
             try {
@@ -149,7 +141,6 @@ class TunnelVpnService : VpnService(), TunProvider {
                 }
             }
 
-            // If using hev-socks5-tunnel mode, start TProxyService on the established TUN fd
             val pfd = interfaceFd
             if (settings.useHevTun && pfd != null) {
                 val startedHev = TProxyService.start(this, pfd, settings)
@@ -179,9 +170,6 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
     }
 
-    /**
-     * Builds the Android VPN session matching `v2rayNG 2.3.10`'s `CoreVpnService.configureVpnService`.
-     */
     private fun openTun(settings: AppSettings): Boolean {
         if (prepare(this) != null) {
             AppLogger.e(TAG, "VPN permission not granted in openTun")
@@ -215,7 +203,6 @@ class TunnelVpnService : VpnService(), TunProvider {
             }
         }
 
-        // Configure VPN DNS servers (matching v2rayNG SettingsManager.getVpnDnsServers)
         val dnsList = settings.vpnDns.split(",")
             .map { it.trim() }
             .filter { it.isNotEmpty() }
@@ -228,7 +215,6 @@ class TunnelVpnService : VpnService(), TunProvider {
             builder.setMetered(settings.meteredNetwork)
         }
 
-        // Route our own app outside the TUN so Xray's outbound sockets never loop into tun0
         runCatching { builder.addDisallowedApplication(packageName) }
 
         if (settings.perAppEnabled && settings.perAppPackages.isNotEmpty()) {
@@ -335,18 +321,15 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
 
         scope.launch(Dispatchers.IO) {
-            // 1. Stop hev-socks5-tunnel first if running (matching v2rayNG CoreVpnService.stopV2Ray)
+
             runCatching { TProxyService.stop() }
 
-            // 2. Stop Xray-core loop
             runCatching { engine?.stop() }
 
-            // 3. Close TUN ParcelFileDescriptor
             val pfd = interfaceFd
             interfaceFd = null
             runCatching { pfd?.close() }
 
-            // 4. Release WakeLock & stop service on Main thread
             releaseWakeLock()
             isServiceAlive = false
             withContext(Dispatchers.Main) {
@@ -414,7 +397,7 @@ class TunnelVpnService : VpnService(), TunProvider {
     private fun acquireWakeLock() {
         if (wakeLock?.isHeld == true) return
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "NebulaBox:tunnel").apply {
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "JavidTun:tunnel").apply {
             setReferenceCounted(false)
             acquire()
         }
@@ -455,14 +438,13 @@ class TunnelVpnService : VpnService(), TunProvider {
     }
 
     companion object {
-        private const val TAG = "NebulaBox"
+        private const val TAG = "JavidTun"
         private const val NOTIFICATION_ID = 1
 
         @Volatile
         var isServiceAlive: Boolean = false
             private set
 
-        // v2rayNG AppConfig.ROUTED_IP_LIST for bypassLan
         private val ROUTED_IP_LIST = arrayOf(
             "0.0.0.0/5",
             "8.0.0.0/7",

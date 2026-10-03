@@ -27,10 +27,6 @@ import java.net.InetSocketAddress
 
 private const val TAG = "XrayEngine"
 
-/**
- * Production [TunnelEngine] backed by `2dust/AndroidLibXrayLite` (`libv2ray.Libv2ray` v26.9.30 /
- * Xray-core v1.260327.1), matching the exact architecture of `2dust/v2rayNG` 2.3.10.
- */
 class LibboxEngine : TunnelEngine {
 
     override val status = MutableStateFlow(TunnelStatus())
@@ -47,12 +43,12 @@ class LibboxEngine : TunnelEngine {
 
     private val callbackHandler = object : CoreCallbackHandler {
         override fun startup(): Long {
-            emitLog(3, "Xray-core callback: startup")
+            emitLog(3, "JavidTun Core callback: startup")
             return 0L
         }
 
         override fun shutdown(): Long {
-            emitLog(3, "Xray-core callback: shutdown")
+            emitLog(3, "JavidTun Core callback: shutdown")
             return 0L
         }
 
@@ -108,7 +104,7 @@ class LibboxEngine : TunnelEngine {
         Seq.setContext(app.applicationContext)
         Libv2ray.initCoreEnv(assetDir.absolutePath, "")
         isInitialized = true
-        AppLogger.i(TAG, "Libv2ray initialized: version=${runCatching { Libv2ray.checkVersionX() }.getOrNull()}, assets=${assetDir.absolutePath}")
+        AppLogger.i(TAG, "Core engine initialized: version=${runCatching { Libv2ray.checkVersionX() }.getOrNull()}, assets=${assetDir.absolutePath}")
     }
 
     @Synchronized
@@ -149,7 +145,7 @@ class LibboxEngine : TunnelEngine {
         get() = runCatching {
             ensureInit()
             Libv2ray.checkVersionX()
-        }.getOrDefault("Xray-core")
+        }.getOrDefault("JavidTun Core")
 
     override val functional: Boolean = true
 
@@ -167,7 +163,7 @@ class LibboxEngine : TunnelEngine {
             state = TunnelState.STARTING,
             profileName = profileName,
         )
-        emitLog(3, "Starting Xray-core for profile: $profileName")
+        emitLog(3, "Starting JavidTun Core for profile: $profileName")
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -188,12 +184,10 @@ class LibboxEngine : TunnelEngine {
                 emitLog(3, "Calling coreController.startLoop (nativeTun=true, tunFd=$fd)")
                 coreController.startLoop(config, fd)
             } else {
-                // Exact v2rayNG 2.3.10 order for hev-socks5-tunnel:
-                // 1. Start Xray-core loop first so 127.0.0.1:10808 is already listening
-                // 2. Then establish the Android VPN TUN interface
+
                 coreController.startLoop(config, 0)
                 if (!coreController.isRunning) {
-                    throw IllegalStateException("Xray-core failed to enter running state")
+                    throw IllegalStateException("JavidTun Core failed to enter running state")
                 }
                 if (!openTun()) {
                     throw IllegalStateException("VPN permission denied or failed to establish TUN interface")
@@ -201,7 +195,7 @@ class LibboxEngine : TunnelEngine {
             }
 
             if (!coreController.isRunning) {
-                throw IllegalStateException("Xray-core failed to enter running state")
+                throw IllegalStateException("JavidTun Core failed to enter running state")
             }
 
             val startedAt = System.currentTimeMillis()
@@ -210,12 +204,12 @@ class LibboxEngine : TunnelEngine {
                 profileName = profileName,
                 startedAt = startedAt,
             )
-            emitLog(3, "Xray-core started successfully")
+            emitLog(3, "JavidTun Core started successfully")
 
             startStatsPolling(profileName, startedAt)
         } catch (t: Throwable) {
             AppLogger.e(TAG, "XrayEngine.start failed: ${t.message}", t)
-            emitLog(1, "Failed to start Xray-core: ${t.message}")
+            emitLog(1, "Failed to start JavidTun Core: ${t.message}")
             stopInternal()
             status.value = TunnelStatus(
                 state = TunnelState.STOPPED,
@@ -242,7 +236,7 @@ class LibboxEngine : TunnelEngine {
         runCatching {
             if (coreController.isRunning) {
                 coreController.stopLoop()
-                emitLog(3, "Xray-core stopped")
+                emitLog(3, "JavidTun Core stopped")
             }
         }.onFailure {
             AppLogger.w(TAG, "coreController.stopLoop warning: ${it.message}")
@@ -314,10 +308,10 @@ class LibboxEngine : TunnelEngine {
             ensureInit()
             val url = testUrl.ifBlank { "https://www.gstatic.com/generate_204" }
             val delay = Libv2ray.measureOutboundDelay(config, url)
-            AppLogger.i("Xray-core", "Real ping (MeasureOutboundDelay): ${delay}ms")
+            AppLogger.i("JavidTun Core", "Real ping (MeasureOutboundDelay): ${delay}ms")
             delay
         } catch (t: Throwable) {
-            AppLogger.e("Xray-core", "Real ping (MeasureOutboundDelay) error: ${t.message}")
+            AppLogger.e("JavidTun Core", "Real ping (MeasureOutboundDelay) error: ${t.message}")
             -1L
         }
     }
@@ -327,10 +321,10 @@ class LibboxEngine : TunnelEngine {
             if (!coreController.isRunning) return -1L
             val url = testUrl.ifBlank { "https://www.gstatic.com/generate_204" }
             val delay = coreController.measureDelay(url)
-            AppLogger.i("Xray-core", "Active connection delay (MeasureDelay): ${delay}ms")
+            AppLogger.i("JavidTun Core", "Active connection delay (MeasureDelay): ${delay}ms")
             delay
         } catch (t: Throwable) {
-            AppLogger.e("Xray-core", "Active connection delay (MeasureDelay) error: ${t.message}")
+            AppLogger.e("JavidTun Core", "Active connection delay (MeasureDelay) error: ${t.message}")
             -1L
         }
     }
@@ -345,10 +339,10 @@ class LibboxEngine : TunnelEngine {
 
     private fun emitLog(level: Int, message: String) {
         when (level) {
-            1 -> AppLogger.e("Xray-core", message)
-            2 -> AppLogger.w("Xray-core", message)
-            4 -> AppLogger.d("Xray-core", message)
-            else -> AppLogger.i("Xray-core", message)
+            1 -> AppLogger.e("JavidTun Core", message)
+            2 -> AppLogger.w("JavidTun Core", message)
+            4 -> AppLogger.d("JavidTun Core", message)
+            else -> AppLogger.i("JavidTun Core", message)
         }
         logs.tryEmit(
             TunnelEngine.LogLine(

@@ -5,10 +5,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-// The Xray-core native engine (libv2ray.aar from 2dust/AndroidLibXrayLite v26.9.30)
-// is placed in app/libs/libv2ray.aar during the build.
-val libv2rayAar = file("libs/libv2ray.aar")
-val hasEngine: Boolean = libv2rayAar.exists()
+val coreArchive = file("libs/libv2ray.aar")
+val hasEngine: Boolean = coreArchive.exists()
 
 android {
     namespace = "app.nebulabox"
@@ -18,8 +16,8 @@ android {
         applicationId = "app.nebulabox"
         minSdk = 24
         targetSdk = 35
-        versionCode = 2
-        versionName = "2.0.0-xray"
+        versionCode = 3
+        versionName = "2.1.0"
         resourceConfigurations += listOf("en", "fa")
         ndk {
             abiFilters += listOf("arm64-v8a")

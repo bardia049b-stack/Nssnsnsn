@@ -14,7 +14,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
-/** Quick settings tile: one tap connects to the last selected profile. */
 @RequiresApi(Build.VERSION_CODES.N)
 class NebulaTileService : TileService() {
 

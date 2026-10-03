@@ -9,11 +9,6 @@ import java.net.Proxy
 import java.net.URL
 import java.util.Locale
 
-/**
- * Queries the active tunnel's exit IP address, country, flag emoji, and HTTP delay
- * through the local sing-box mixed proxy port (`127.0.0.1:10808`), matching v2rayNG's
- * `SpeedtestManager.getRemoteIPInfo()`.
- */
 object IpLocationChecker {
 
     const val LOCAL_MIXED_PORT = 10808
@@ -41,16 +36,12 @@ object IpLocationChecker {
         withContext(Dispatchers.IO) {
             val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort))
 
-            // 1. Try ip-api.com (fast JSON with country, countryCode, city, isp, query)
             fetchFromIpApi(proxy)?.let { return@withContext it }
 
-            // 2. Try api.ip.sb/geoip (v2rayNG's default IP_API_URL)
             fetchFromIpSb(proxy)?.let { return@withContext it }
 
-            // 3. Try ipwho.is
             fetchFromIpWhois(proxy)?.let { return@withContext it }
 
-            // 4. Try cloudflare cdn-cgi/trace (always works on Cloudflare Workers *.workers.dev)
             fetchFromCloudflareTrace(proxy)?.let { return@withContext it }
 
             null
@@ -160,7 +151,7 @@ object IpLocationChecker {
                 connectTimeout = timeoutMs
                 readTimeout = timeoutMs
                 instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Android; NebulaBox)")
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Android; JavidTun)")
                 setRequestProperty("Accept", "application/json, text/plain, */*")
                 setRequestProperty("Connection", "close")
             }

@@ -31,7 +31,6 @@ import app.nebulabox.engine.OutboundGroup
 import app.nebulabox.ui.NebulaViewModel
 import app.nebulabox.util.Formatters
 
-/** Selector / URL-test groups reported by the tunnel while it is running. */
 @Composable
 fun GroupsScreen(viewModel: NebulaViewModel) {
     val groups by viewModel.groups.collectAsStateWithLifecycle()

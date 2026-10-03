@@ -3,9 +3,6 @@ package app.nebulabox.data
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
-/**
- * The protocol families the Xray-core tunnel engine can speak.
- */
 enum class Protocol(val wire: String) {
     @SerialName("vless")
     VLESS("vless"),
@@ -54,20 +51,19 @@ enum class Protocol(val wire: String) {
     }
 }
 
-/** Stream transport wrapped around a proxy protocol. */
 @Serializable
 data class Transport(
-    val type: String = "tcp",          // tcp | ws | httpupgrade | xhttp | h2 | http | kcp | grpc | quic
-    val host: String = "",             // Host header / SNI override
-    val path: String = "",             // ws / httpupgrade / xhttp path (preserves ?ed=2048 for Xray)
+    val type: String = "tcp",
+    val host: String = "",
+    val path: String = "",
     val headers: Map<String, String> = emptyMap(),
-    val headerType: String = "none",   // none | http | srtp | utp | wechat-video | dtls | wireguard
-    val serviceName: String = "",      // grpc service name
-    val authority: String = "",        // grpc authority
-    val grpcMode: String = "gun",      // gun | multi
-    val xhttpMode: String = "auto",    // auto | packet-up | stream-up | stream-one
+    val headerType: String = "none",
+    val serviceName: String = "",
+    val authority: String = "",
+    val grpcMode: String = "gun",
+    val xhttpMode: String = "auto",
     val xhttpExtra: String = "",
-    val seed: String = "",             // mKCP seed
+    val seed: String = "",
     val maxEarlyData: Int = 0,
     val earlyDataHeader: String = "",
 )
@@ -93,7 +89,6 @@ data class TlsSettings(
     val mldsa65Verify: String = "",
 )
 
-/** Subscription group item (aligned with v2rayNG SubscriptionItem). */
 @Serializable
 data class SubscriptionItem(
     val id: String,
@@ -104,7 +99,6 @@ data class SubscriptionItem(
     val userAgent: String = "",
 )
 
-/** A single server or custom JSON configuration the user can connect to. */
 @Serializable
 data class Profile(
     val id: String,
@@ -113,31 +107,26 @@ data class Profile(
     val server: String = "",
     val serverPort: Int = 0,
 
-    // authentication, meaning depends on protocol
-    val username: String = "",         // socks / http user, ssh user, tuic uuid
-    val password: String = "",         // ss / trojan / socks / ssh password, tuic token, hysteria2 auth
-    val uuid: String = "",             // vless / vmess id
-    val encryption: String = "none",   // vless encryption (default "none")
+    val username: String = "",
+    val password: String = "",
+    val uuid: String = "",
+    val encryption: String = "none",
 
-    // vless / hysteria2 flow control & port hopping
-    val flow: String = "",             // xtls-rprx-vision | xtls-rprx-vision-udp443
+    val flow: String = "",
     val upMbps: Int = 0,
     val downMbps: Int = 0,
-    val obfsPassword: String = "",     // hysteria2 salamander obfs password
-    val portHopping: String = "",      // hysteria2 mport e.g. "20000-50000"
+    val obfsPassword: String = "",
+    val portHopping: String = "",
     val portHoppingInterval: String = "30",
-    val finalMask: String = "",        // Xray finalmask JSON from &fm=
+    val finalMask: String = "",
 
-    // vmess specifics
     val alterId: Int = 0,
-    val security: String = "auto",     // auto | aes-128-gcm | chacha20-poly1305 | none | zero
+    val security: String = "auto",
 
-    // shadowsocks specifics
     val method: String = "",
     val plugin: String = "",
     val pluginOptions: String = "",
 
-    // wireguard specifics
     val privateKey: String = "",
     val peerPublicKey: String = "",
     val preSharedKey: String = "",
@@ -145,7 +134,6 @@ data class Profile(
     val reserved: List<Int> = emptyList(),
     val mtu: Int = 1420,
 
-    // ssh specifics
     val clientVersion: String = "SSH-2.0-OpenSSH_9.8",
     val hostKeyAlgorithms: List<String> = emptyList(),
     val knownHosts: String = "",
@@ -153,7 +141,6 @@ data class Profile(
     val transport: Transport = Transport(),
     val tls: TlsSettings = TlsSettings(),
 
-    // Raw custom Xray JSON configuration (matching v2rayNG EConfigType.CUSTOM)
     val customConfig: String = "",
 
     val subscriptionId: String = "",
@@ -161,7 +148,7 @@ data class Profile(
     val remark: String = "",
     var order: Int = 0,
     var lastTestedAt: Long = 0,
-    // 0 = untested (renders empty string ""), > 0 = ms in green, < 0 (-1) = failed in red (matches v2rayNG testDelayMillis)
+
     var lastDelayMs: Int = 0,
 ) {
     val displayName: String
@@ -174,10 +161,6 @@ data class Profile(
             }
         }
 
-    /**
-     * Type description matching v2rayNG's `MainServerRowModels.buildTypeDescription`:
-     * e.g. `VLESS / ws / tls` or `CUSTOM`.
-     */
     val typeDescription: String
         get() {
             if (protocol == Protocol.CUSTOM) return "CUSTOM"
@@ -192,10 +175,6 @@ data class Profile(
             }.joinToString(" / ")
         }
 
-    /**
-     * Formatted address line matching v2rayNG's `MainServerRowModels`:
-     * `example.com : 443`.
-     */
     val formattedAddress: String
         get() {
             val s = server.trim()
@@ -204,17 +183,9 @@ data class Profile(
             return if (serverPort > 0) "$masked : $serverPort" else masked
         }
 
-    /**
-     * Delay string matching v2rayNG's `ServerAffiliationInfo.getTestDelayString()`:
-     * `0` -> `""` (nothing displayed before testing), `> 0` -> `"123 ms"`, `< 0` -> `"-1 ms"`.
-     */
     val testDelayString: String
         get() = if (lastDelayMs == 0) "" else "$lastDelayMs ms"
 
-    /**
-     * Identity key for deduplication (matches v2rayNG ProfileItem.duplicateIdentity).
-     * Ignores id, name, order, subscriptionId, and lastDelayMs.
-     */
     fun duplicateKey(): String {
         if (protocol == Protocol.CUSTOM) {
             return "custom:${customConfig.trim().hashCode()}"

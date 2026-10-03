@@ -293,7 +293,6 @@ private fun ConnectCard(
                 }
             }
 
-            // Connected Exit IP & Country OR Real Ping Test Bar (matching v2rayNG bottom bar)
             ConnectedLocationOrPingBadge(
                 running = running,
                 location = location,
@@ -487,7 +486,6 @@ private fun QuickXrayControlsCard(
                 )
             }
 
-            // 1. TLS Fragment toggle (essential for Iranian ISPs)
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -513,7 +511,6 @@ private fun QuickXrayControlsCard(
                 )
             }
 
-            // 2. Routing Mode Quick Chips (Global / Bypass Iran / Rule)
             Text(
                 text = "Routing Preset",
                 style = MaterialTheme.typography.labelMedium,
@@ -539,7 +536,6 @@ private fun QuickXrayControlsCard(
                 }
             }
 
-            // 3. TUN Engine Mode Quick Chips (hev-socks5-tunnel vs Xray Native TUN)
             Text(
                 text = "TUN Engine",
                 style = MaterialTheme.typography.labelMedium,
@@ -552,7 +548,7 @@ private fun QuickXrayControlsCard(
                 FilterChip(
                     selected = settings.useHevTun,
                     onClick = { onUpdateSettings { it.copy(useHevTun = true) } },
-                    label = { Text("hev-socks5-tunnel (v2rayNG)") },
+                    label = { Text("hev-socks5-tunnel") },
                 )
                 FilterChip(
                     selected = !settings.useHevTun,

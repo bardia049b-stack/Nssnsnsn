@@ -6,7 +6,6 @@ import kotlin.math.pow
 
 object Formatters {
 
-    /** Bytes per second into a readable rate. */
     fun speed(bytesPerSecond: Long): String {
         if (bytesPerSecond <= 0) return "0 B/s"
         return size(bytesPerSecond) + "/s"
@@ -21,7 +20,6 @@ object Formatters {
         return String.format(Locale.US, format, value) + " " + units[exponent]
     }
 
-    /** Elapsed time since [fromMillis] as h:mm:ss. */
     fun duration(fromMillis: Long, nowMillis: Long = System.currentTimeMillis()): String {
         if (fromMillis <= 0) return "--:--"
         val seconds = ((nowMillis - fromMillis) / 1000).coerceAtLeast(0)
@@ -33,7 +31,6 @@ object Formatters {
 
     fun delay(millis: Int): String = if (millis < 0) "—" else "${millis} ms"
 
-    /** Masks a secret so it can be shown in a list without leaking it. */
     fun secret(value: String): String = when {
         value.isEmpty() -> ""
         value.length <= 4 -> "•".repeat(value.length)

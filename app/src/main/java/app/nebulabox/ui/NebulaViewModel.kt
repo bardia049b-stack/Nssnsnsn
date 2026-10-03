@@ -102,17 +102,14 @@ class NebulaViewModel(
     private val _updatingSubscriptions = MutableStateFlow(false)
     val updatingSubscriptions: StateFlow<Boolean> = _updatingSubscriptions.asStateFlow()
 
-    /** Matches v2rayNG 2.3.10 `BaseViewModel.isLoading` — only true during short user actions. */
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
-    /** Matches v2rayNG 2.3.10 `RealPingExecutionLimiter` for Custom JSON configs. */
     private val customConfigPingMutex = Mutex()
 
     private var locationJob: Job? = null
     private var batchTestJob: Job? = null
 
-    /** Profile currently being edited in the bottom sheet, if any. */
     var draftProfile: Profile? = null
 
     private val pendingImport = MutableStateFlow<String?>(null)
@@ -122,7 +119,6 @@ class NebulaViewModel(
     private val snack = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val snacks = snack.asSharedFlow()
 
-    /** Set while waiting for the user to approve the VPN permission dialog. */
     private val pendingConnectId = MutableStateFlow<String?>(null)
 
     init {
@@ -134,8 +130,6 @@ class NebulaViewModel(
                 .collect { logs.emit(it) }
         }
 
-        // Automatically query connected Exit IP & Country in the background when tunnel state becomes STARTED.
-        // Never sets _isLoading so the top progress bar never gets stuck.
         viewModelScope.launch {
             status
                 .map { it.state }
@@ -174,16 +168,11 @@ class NebulaViewModel(
         }
     }
 
-    // ----------------------------------------------------------- location & active delay test
-
     fun refreshLocation() {
         if (status.value.state != TunnelState.STARTED) return
         testActiveConnectionDelay()
     }
 
-    /**
-     * Matches v2rayNG 2.3.10's bottom-bar tap (`TestCurrentServer` -> `testCurrentServerRealPing` + `getRemoteIPInfo`).
-     */
     fun testActiveConnectionDelay() {
         val currentSettings = settings.value.normalized()
         val selected = profiles.value.firstOrNull { it.id == currentSettings.selectedProfileId }
@@ -272,15 +261,6 @@ class NebulaViewModel(
         }
     }
 
-    // ----------------------------------------------------------- real ping & tcp ping (v2rayNG 2.3.10)
-
-    /**
-     * Exact port of `v2rayNG 2.3.10` `RealPingWorkerService.startRealPing`:
-     *  1. Fast 1000ms TCP connect pre-check for non-Custom, non-Hysteria2, non-WireGuard profiles.
-     *  2. Builds config via `ConfigBuilder.buildForSpeedtest`.
-     *  3. Serializes `Protocol.CUSTOM` measurements via `customConfigPingMutex`.
-     *  4. Measures HTTP 204 latency via `Libv2ray.measureOutboundDelay`.
-     */
     private suspend fun runSingleRealPing(profile: Profile, settings: AppSettings): Int {
         if (profile.protocol != Protocol.CUSTOM &&
             profile.protocol != Protocol.HYSTERIA2 &&
@@ -335,9 +315,6 @@ class NebulaViewModel(
         _testingProfileIds.value = emptySet()
     }
 
-    /**
-     * Batch Real Ping (`TestRealAllServers` in v2rayNG 2.3.10).
-     */
     fun testAllRealPing() {
         if (_testingProgress.value != null) {
             cancelAllPing()
@@ -358,7 +335,7 @@ class NebulaViewModel(
             val total = targetList.size
             var completed = 0
             _testingProgress.value = 0 to total
-            // Clear previous test results to 0 ("") before running batch test, matching v2rayNG 2.3.10
+
             profileStore.clearTestDelays(targetList.mapTo(HashSet()) { it.id })
             val semaphore = Semaphore(6)
 
@@ -392,9 +369,6 @@ class NebulaViewModel(
         }
     }
 
-    /**
-     * Batch TCP Ping (`TestAllServers` in v2rayNG 2.3.10).
-     */
     fun testAllTcpPing() {
         if (_testingProgress.value != null) {
             cancelAllPing()
@@ -462,8 +436,6 @@ class NebulaViewModel(
         }
     }
 
-    // ----------------------------------------------------------- connecting
-
     fun connect(profile: Profile) {
         viewModelScope.launch {
             settingsStore.update { it.copy(selectedProfileId = profile.id) }
@@ -525,8 +497,6 @@ class NebulaViewModel(
             }
         }
     }
-
-    // ------------------------------------------------------------- profiles & v2rayNG batch ops
 
     fun saveProfile(profile: Profile) {
         viewModelScope.launch {
@@ -595,7 +565,6 @@ class NebulaViewModel(
         }
     }
 
-    /** Immediately parses and imports links or Custom JSON text. */
     fun submitImportText(text: String) {
         if (text.isBlank()) return
         launchLoading {
@@ -615,7 +584,7 @@ class NebulaViewModel(
 
     private suspend fun importTextInternal(text: String) {
         val trimmed = text.trim()
-        // If user pasted a single http(s) subscription URL that doesn't have userInfo, import as subscription
+
         if ((trimmed.startsWith("https://", true) || trimmed.startsWith("http://", true)) &&
             !trimmed.contains("\n") && !trimmed.substringAfter("://").substringBefore("/").contains("@")
         ) {
@@ -663,8 +632,6 @@ class NebulaViewModel(
     fun exportProfiles(callback: (String) -> Unit) {
         viewModelScope.launch { callback(profileStore.exportJson()) }
     }
-
-    // ------------------------------------------------------------- subscriptions
 
     fun selectSubscriptionFilter(subId: String) {
         viewModelScope.launch {
@@ -771,7 +738,7 @@ class NebulaViewModel(
                 connectTimeout = 10000
                 readTimeout = 15000
                 instanceFollowRedirects = true
-                setRequestProperty("User-Agent", "v2rayNG/2.3.10")
+                setRequestProperty("User-Agent", "JavidTun/2.1.0")
                 setRequestProperty("Accept", "*/*")
             }
             if (conn.responseCode in 200..299) {
@@ -786,13 +753,9 @@ class NebulaViewModel(
         }
     }
 
-    // ------------------------------------------------------------- settings
-
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch { settingsStore.update(transform) }
     }
-
-    // ---------------------------------------------------------------- misc
 
     fun selectOutbound(groupTag: String, itemTag: String) {
         Engines.active.value?.selectOutbound(groupTag, itemTag)

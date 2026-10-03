@@ -5,10 +5,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
-/**
- * Thin wrapper so the call sites do not have to opt in to the experimental
- * FlowRow API every time they use it.
- */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FlowRowCompat(

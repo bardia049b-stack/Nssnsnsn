@@ -6,14 +6,6 @@ import app.nebulabox.data.AppSettings
 import app.nebulabox.util.AppLogger
 import java.io.File
 
-/**
- * JNI bridge for `libhev-socks5-tunnel.so` extracted from `2dust/v2rayNG` 2.3.10.
- *
- * IMPORTANT: The package name (`com.v2ray.ang.service`), class name (`TProxyService`),
- * and the exact 4 `@JvmStatic external` method signatures (`(Ljava/lang/String;I)Z`,
- * `()Z`, `()Z`, `()[J`) MUST remain unchanged because `libhev-socks5-tunnel.so`
- * registers all 4 via `RegisterNatives` inside `JNI_OnLoad`.
- */
 class TProxyService {
     companion object {
         private const val TAG = "HevTun"

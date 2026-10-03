@@ -42,9 +42,6 @@ import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
 import app.nebulabox.util.ShareLinkParser
 
-/**
- * Full v2rayNG-compatible manual profile editor for Xray-core.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileEditSheet(
@@ -121,7 +118,7 @@ fun ProfileEditSheet(
             OutlinedTextField(
                 value = profile.customConfig,
                 onValueChange = { profile = profile.copy(customConfig = it) },
-                label = { Text("Custom Xray JSON Config") },
+                label = { Text("Custom JSON Config") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 8,
                 maxLines = 16,
@@ -320,7 +317,6 @@ fun ProfileEditSheet(
                 Protocol.NAIVE, Protocol.CUSTOM, Protocol.DIRECT -> Unit
             }
 
-            // Stream Transport + TLS / REALITY
             if (profile.protocol in setOf(
                     Protocol.VLESS, Protocol.VMESS, Protocol.TROJAN, Protocol.SHADOWSOCKS, Protocol.HYSTERIA2,
                 )

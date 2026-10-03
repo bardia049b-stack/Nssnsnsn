@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "NebulaBox"
+rootProject.name = "JavidTun"
 include(":app")

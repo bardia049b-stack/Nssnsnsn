@@ -36,15 +36,15 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Cache Xray-core libv2ray.aar
-        id: cache-libv2ray
+      - name: Cache Core Archive
+        id: cache-core
         uses: actions/cache@v4
         with:
           path: app/libs/libv2ray.aar
-          key: libv2ray-v26.9.30-v1
+          key: core-v26.9.30-v1
 
-      - name: Download Xray-core (AndroidLibXrayLite v26.9.30)
-        if: steps.cache-libv2ray.outputs.cache-hit != 'true'
+      - name: Download Core Archive
+        if: steps.cache-core.outputs.cache-hit != 'true'
         run: |
           mkdir -p ${{ github.workspace }}/app/libs
           curl -fL --retry 3 -o ${{ github.workspace }}/app/libs/libv2ray.aar \
@@ -73,7 +73,7 @@ jobs:
 
           if [ -n "$APK_PATH" ]; then
             SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-            APK_NAME="NebulaBox-${BUILD_TYPE}-${SHORT_SHA}.apk"
+            APK_NAME="JavidTun-${BUILD_TYPE}-${SHORT_SHA}.apk"
             cp "$APK_PATH" "$APK_NAME"
             echo "apk_path=$APK_NAME" >> $GITHUB_OUTPUT
             echo "::notice::APK built: $APK_NAME ($(stat -c%s "$APK_NAME") bytes)"
@@ -87,7 +87,7 @@ jobs:
         if: steps.build_apk.outputs.apk_path != ''
         uses: actions/upload-artifact@v4
         with:
-          name: NebulaBox-APK
+          name: JavidTun-APK
           path: ${{ steps.build_apk.outputs.apk_path }}
           retention-days: 30
 
@@ -95,14 +95,13 @@ jobs:
         if: steps.build_apk.outputs.apk_path != ''
         uses: softprops/action-gh-release@v2
         with:
-          name: NebulaBox ${{ github.sha }}
-          tag_name: v2.0.0-${{ github.run_number }}
+          name: JavidTun ${{ github.sha }}
+          tag_name: v2.1.0-${{ github.run_number }}
           body: |
-            **NebulaBox v2.0.0 - Xray-core Edition (v2rayNG Parity)**
+            **JavidTun v2.1.0**
 
-            - Powered by **Xray-core v1.260327.1** (`2dust/AndroidLibXrayLite v26.9.30` `libv2ray.aar`) + **`hev-socks5-tunnel`** (`libhev-socks5-tunnel.so`)
-            - Full **v2rayNG 2.3.10** feature & configuration parity in Material 3 UI
-            - Real HTTP 204 Ping (`measureOutboundDelay`), Batch Real Ping & TCP Ping, Sort by Latency, Remove Duplicates/Timeouts, Subscription Groups, QR Code & URI Share, TLS Fragment (`finalmask`), and Iran Routing (`white_iran`)
+            - Minimal Material 3 Hybrid UI with JavidTun custom identity
+            - High-performance native tunnel engine with Real Delay Ping, Subscription Groups, QR Code & Share Links, TLS Fragment, and Regional Routing
           files: |
             ${{ steps.build_apk.outputs.apk_path }}
           fail_on_unmatched_files: false
