@@ -24,7 +24,7 @@ import java.util.Locale
  *  2. Archives native Go (`libbox.so`) stderr crash reports (`CrashReport-*.log`) on startup
  *     before `Libbox.setup()` truncates them.
  *  3. Records structured step-by-step application and tunnel lifecycle logs (`INFO`, `WARN`, `ERROR`)
- *     both in-memory ([entries]) and to `filesDir/app_debug.log`.
+ *     both in-memory ([logs]) and to `filesDir/app_debug.log`.
  *  4. Stores the last generated sing-box JSON configuration (`last_config.json`) for inspection
  *     in the Debug screen.
  *  5. Reads the process's own Android `logcat` buffer on demand.
@@ -38,20 +38,21 @@ object AppLogger {
         ERROR(5, "E"),
     }
 
-    data class Entry(
+    data class LogEntry(
         val id: Long,
-        val time: Long,
+        val timestamp: Long,
         val level: Level,
         val tag: String,
         val message: String,
+        val stacktrace: String? = null,
     )
 
     data class CrashReport(
-        val fileName: String,
+        val id: String,
         val timestamp: Long,
-        val title: String,
-        val content: String,
-        val isNativeGoCrash: Boolean,
+        val source: String,
+        val summary: String,
+        val details: String,
     )
 
     private const val MAX_MEMORY_ENTRIES = 600
@@ -63,14 +64,14 @@ object AppLogger {
     private lateinit var lastConfigFile: File
 
     private val nextId = java.util.concurrent.atomic.AtomicLong(1L)
-    private val _entries = MutableStateFlow<List<Entry>>(emptyList())
-    val entries: StateFlow<List<Entry>> = _entries.asStateFlow()
+    private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
+    val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
     private val _crashes = MutableStateFlow<List<CrashReport>>(emptyList())
     val crashes: StateFlow<List<CrashReport>> = _crashes.asStateFlow()
 
-    private val _lastConfig = MutableStateFlow("")
-    val lastConfig: StateFlow<String> = _lastConfig.asStateFlow()
+    private val _lastGeneratedConfig = MutableStateFlow("")
+    val lastGeneratedConfig: StateFlow<String> = _lastGeneratedConfig.asStateFlow()
 
     @Volatile
     private var initialized = false
@@ -87,7 +88,7 @@ object AppLogger {
             // Load persisted last config if present
             runCatching {
                 if (lastConfigFile.exists()) {
-                    _lastConfig.value = lastConfigFile.readText()
+                    _lastGeneratedConfig.value = lastConfigFile.readText()
                 }
             }
 
@@ -99,7 +100,7 @@ object AppLogger {
             installUncaughtExceptionHandler()
 
             // Refresh crash list state
-            refreshCrashReports()
+            refreshNativeCrashes()
 
             initialized = true
             i("AppLogger", "Initialized on ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE}, SDK ${Build.VERSION.SDK_INT})")
@@ -111,12 +112,10 @@ object AppLogger {
     fun w(tag: String, message: String, tr: Throwable? = null) = log(Level.WARN, tag, message, tr)
     fun e(tag: String, message: String, tr: Throwable? = null) = log(Level.ERROR, tag, message, tr)
 
-    private fun log(level: Level, tag: String, message: String, tr: Throwable?) {
-        val fullMsg = if (tr != null) {
-            "$message\n${stackTraceString(tr)}"
-        } else {
-            message
-        }
+    fun log(level: Level, tag: String, message: String, tr: Throwable? = null) {
+        val traceStr = tr?.let { stackTraceString(it) }
+        val fullMsg = if (traceStr != null) "$message\n$traceStr" else message
+
         when (level) {
             Level.DEBUG -> Log.d(tag, fullMsg)
             Level.INFO -> Log.i(tag, fullMsg)
@@ -125,22 +124,23 @@ object AppLogger {
         }
 
         val now = System.currentTimeMillis()
-        val entry = Entry(
+        val entry = LogEntry(
             id = nextId.getAndIncrement(),
-            time = now,
+            timestamp = now,
             level = level,
             tag = tag,
-            message = fullMsg,
+            message = message,
+            stacktrace = traceStr,
         )
 
-        synchronized(_entries) {
-            val current = _entries.value
+        synchronized(_logs) {
+            val current = _logs.value
             val updated = if (current.size >= MAX_MEMORY_ENTRIES) {
                 current.drop(current.size - MAX_MEMORY_ENTRIES + 1) + entry
             } else {
                 current + entry
             }
-            _entries.value = updated
+            _logs.value = updated
         }
 
         if (::logFile.isInitialized) {
@@ -156,32 +156,31 @@ object AppLogger {
     }
 
     fun recordGeneratedConfig(config: String) {
-        _lastConfig.value = config
+        _lastGeneratedConfig.value = config
         if (::lastConfigFile.isInitialized) {
             runCatching { lastConfigFile.writeText(config) }
         }
     }
 
     fun clearLogs() {
-        synchronized(_entries) {
-            _entries.value = emptyList()
+        synchronized(_logs) {
+            _logs.value = emptyList()
         }
         if (::logFile.isInitialized) {
             runCatching { logFile.writeText("") }
         }
     }
 
-    fun clearCrashReports() {
+    fun clearCrashes() {
         if (!::crashDir.isInitialized) return
         runCatching {
             crashDir.listFiles()?.forEach { it.delete() }
-            // Also clear any active CrashReport-*.log if empty or stale
             getCandidateNativeDirs().forEach { dir ->
                 dir.listFiles()?.filter { it.name.startsWith("CrashReport") && it.name.endsWith(".log") }
                     ?.forEach { runCatching { it.writeText("") } }
             }
         }
-        refreshCrashReports()
+        refreshNativeCrashes()
     }
 
     /**
@@ -213,7 +212,6 @@ object AppLogger {
                                 }
                                 target.writeText(header)
                             }
-                            // Clear original so we don't re-archive the same crash on every launch
                             runCatching { file.writeText("") }
                         }
                     }
@@ -223,13 +221,12 @@ object AppLogger {
         }
     }
 
-    fun refreshCrashReports() {
+    fun refreshNativeCrashes() {
         if (!::crashDir.isInitialized) return
-        // Also check if any new content was written to CrashReport-*.log during the current session
         runCatching {
             val list = mutableListOf<CrashReport>()
 
-            // 1. Check live CrashReport-*.log files in case a non-fatal stderr message was written
+            // 1. Check live CrashReport-*.log files in case stderr was written during the session
             for (dir in getCandidateNativeDirs()) {
                 val files = dir.listFiles() ?: continue
                 for (file in files) {
@@ -237,11 +234,11 @@ object AppLogger {
                         val content = runCatching { file.readText().trim() }.getOrDefault("")
                         if (content.isNotEmpty()) {
                             list += CrashReport(
-                                fileName = file.name,
+                                id = "live_${file.name}",
                                 timestamp = file.lastModified().takeIf { it > 0 } ?: System.currentTimeMillis(),
-                                title = "Native libbox stderr (${file.name})",
-                                content = content,
-                                isNativeGoCrash = true,
+                                source = "NATIVE (libbox.so)",
+                                summary = content.lines().firstOrNull { it.isNotBlank() }?.take(120) ?: "Native libbox stderr (${file.name})",
+                                details = content,
                             )
                         }
                     }
@@ -262,16 +259,54 @@ object AppLogger {
                     it.contains("Exception") || it.contains("Error") || it.contains("panic:") || it.contains("SIG")
                 } ?: if (isNative) "Native libbox.so Crash" else "Application Crash"
                 list += CrashReport(
-                    fileName = file.name,
+                    id = file.name,
                     timestamp = file.lastModified(),
-                    title = firstLine.take(100),
-                    content = content,
-                    isNativeGoCrash = isNative,
+                    source = if (isNative) "NATIVE (libbox.so)" else "JVM",
+                    summary = firstLine.take(120),
+                    details = content,
                 )
             }
 
             _crashes.value = list
         }
+    }
+
+    fun exportLogsText(): String = buildString {
+        append(deviceInfoHeader())
+        appendLine()
+        val tf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
+        for (e in _logs.value) {
+            appendLine("${tf.format(Date(e.timestamp))} ${e.level.label}/${e.tag}: ${e.message}")
+            if (!e.stacktrace.isNullOrBlank()) {
+                appendLine(e.stacktrace)
+            }
+        }
+    }
+
+    fun exportCrashesText(): String = buildString {
+        append(deviceInfoHeader())
+        appendLine()
+        val list = _crashes.value
+        if (list.isEmpty()) {
+            appendLine("(No crash reports recorded)")
+        } else {
+            for (c in list) {
+                appendLine("----- [${c.source}] ${c.summary} -----")
+                appendLine(c.details)
+                appendLine()
+            }
+        }
+    }
+
+    fun deviceInfoHeader(): String = buildString {
+        appendLine("App: NebulaBox v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+        appendLine("Engine Compiled: ${BuildConfig.HAS_ENGINE}")
+        appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.PRODUCT})")
+        appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
+        appendLine("Fingerprint: ${Build.FINGERPRINT}")
+        appendLine("Supported ABIs: ${Build.SUPPORTED_ABIS.joinToString(", ")}")
+        appendLine("Process PID: ${Process.myPid()}")
+        appendLine("Recorded Crashes: ${_crashes.value.size}")
     }
 
     fun readSystemLogcat(maxLines: Int = 350): String {
@@ -285,7 +320,6 @@ object AppLogger {
             if (output.isNotBlank()) {
                 output
             } else {
-                // Fallback without --pid for older Android versions
                 val p2 = ProcessBuilder("logcat", "-d", "-v", "time", "-t", maxLines.toString())
                     .redirectErrorStream(true)
                     .start()
@@ -294,17 +328,6 @@ object AppLogger {
                 out2
             }
         }.getOrElse { "Failed to read logcat: ${it.message}" }
-    }
-
-    fun buildDiagnosticsSummary(): String = buildString {
-        appendLine("App: NebulaBox v${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
-        appendLine("Engine Compiled: ${BuildConfig.HAS_ENGINE}")
-        appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL} (${Build.PRODUCT})")
-        appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
-        appendLine("Fingerprint: ${Build.FINGERPRINT}")
-        appendLine("Supported ABIs: ${Build.SUPPORTED_ABIS.joinToString(", ")}")
-        appendLine("Process PID: ${Process.myPid()}")
-        appendLine("Recorded Crashes: ${_crashes.value.size}")
     }
 
     private fun getCandidateNativeDirs(): List<File> {
@@ -336,8 +359,8 @@ object AppLogger {
                     appendLine(stackTraceString(throwable))
                     appendLine()
                     appendLine("Recent App Logs:")
-                    _entries.value.takeLast(50).forEach { entry ->
-                        val t = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(entry.time))
+                    _logs.value.takeLast(50).forEach { entry ->
+                        val t = SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date(entry.timestamp))
                         appendLine("$t [${entry.level.label}/${entry.tag}] ${entry.message}")
                     }
                 }

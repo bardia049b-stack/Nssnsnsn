@@ -244,9 +244,6 @@ class LibboxEngine : TunnelEngine {
         val platformInterface = Platform()
         platform = platformInterface
 
-        runCatching { Libbox.promoteOOMDraft() }
-        runCatching { Libbox.discardPowerReportDraft() }
-
         AppLogger.i(TAG, "Starting CommandServer for profile '$profileName'")
         val server = CommandServer(serverHandler, platformInterface)
         server.start()
