@@ -34,13 +34,7 @@ data class GroupItem(
 )
 
 /**
- * The contract between the UI and whatever drives the tunnel.
- *
- * Two implementations exist:
- *  - [LibboxEngine] in src/engine/java, backed by the sing-box native core.
- *    It is compiled in only when app/libs/libbox.aar is present.
- *  - [UnavailableEngine], compiled when the core is absent, which reports the
- *    situation honestly instead of pretending to tunnel.
+ * The contract between the UI and the native Xray-core (`libv2ray.aar`) tunnel engine.
  */
 interface TunnelEngine {
 
@@ -48,7 +42,7 @@ interface TunnelEngine {
     val groups: MutableStateFlow<List<OutboundGroup>>
     val logs: Flow<LogLine>
 
-    /** Human readable name of the implementation, shown in the About screen. */
+    /** Human readable name of the implementation, shown in the About & Home screens. */
     val implementationName: String
 
     /** Whether this build can actually establish a tunnel. */
@@ -65,39 +59,35 @@ interface TunnelEngine {
     fun urlTest(groupTag: String)
     fun clearLogs()
 
+    /**
+     * Measures real HTTP delay (in ms) for an arbitrary Xray JSON config (no inbounds required),
+     * backed by `Libv2ray.measureOutboundDelay(config, testUrl)`. Returns -1L on failure.
+     */
+    fun measureOutboundDelay(config: String, testUrl: String): Long = -1L
+
+    /**
+     * Measures real HTTP delay (in ms) through the currently running Xray instance,
+     * backed by `CoreController.measureDelay(testUrl)`. Returns -1L on failure.
+     */
+    fun measureActiveDelay(testUrl: String): Long = -1L
+
     data class LogLine(val level: Int, val time: Long, val message: String)
 }
 
-/**
- * The Android side of the tunnel contract, implemented by the VPN service.
- *
- * It lives in the engine package rather than referencing the service directly
- * so that the native implementation stays compilable in isolation.
- */
 interface TunProvider {
-    /** Detaches the tun descriptor; ownership passes to the caller. */
+    /** Returns the raw TUN file descriptor. */
     fun tunFileDescriptor(): Int
 
     /** Routes a raw socket around the tunnel. */
     fun protectSocket(fd: Int): Boolean
 }
 
-/**
- * Shared handle so the UI can observe tunnel state without binding to the
- * service. The service publishes the active engine here on start.
- */
 object Engines {
     val active: MutableStateFlow<TunnelEngine?> = MutableStateFlow(null)
 
-    /** Set by the VPN service while it is alive. */
     @Volatile
     var tunProvider: TunProvider? = null
 
-    /**
-     * Resolves which engine this APK contains. Reflection is used so that the
-     * app module does not need the native core on the compile classpath when it
-     * has not been built yet.
-     */
     fun obtain(): TunnelEngine {
         active.value?.let { return it }
         val engine = if (app.nebulabox.BuildConfig.HAS_ENGINE) {
@@ -106,7 +96,7 @@ object Engines {
                 clazz.getDeclaredConstructor().newInstance() as TunnelEngine
             }.getOrElse {
                 UnavailableEngine(
-                    "libbox present but failed to initialise: ${it.message}",
+                    "Xray-core present but failed to initialise: ${it.message}",
                 )
             }
         } else {

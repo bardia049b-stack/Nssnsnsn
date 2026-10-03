@@ -43,8 +43,7 @@ import app.nebulabox.data.Protocol
 import app.nebulabox.util.ShareLinkParser
 
 /**
- * Manual entry form for a server or custom JSON configuration.
- * Fields shown depend on the protocol.
+ * Full v2rayNG-compatible manual profile editor for Xray-core.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,13 +65,14 @@ fun ProfileEditSheet(
         )
     }
     var serverPort by remember { mutableStateOf(profile.serverPort.toString()) }
+    var alpnText by remember { mutableStateOf(profile.tls.alpn.joinToString(",")) }
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = 640.dp)
+            .heightIn(max = 660.dp)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(
@@ -121,7 +121,7 @@ fun ProfileEditSheet(
             OutlinedTextField(
                 value = profile.customConfig,
                 onValueChange = { profile = profile.copy(customConfig = it) },
-                label = { Text(stringResource(R.string.field_custom_json)) },
+                label = { Text("Custom Xray JSON Config") },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 8,
                 maxLines = 16,
@@ -148,7 +148,30 @@ fun ProfileEditSheet(
             )
 
             when (profile.protocol) {
-                Protocol.VLESS, Protocol.TUIC -> {
+                Protocol.VLESS -> {
+                    OutlinedTextField(
+                        value = profile.uuid,
+                        onValueChange = { profile = profile.copy(uuid = it) },
+                        label = { Text(stringResource(R.string.field_uuid)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    SimpleDropdown(
+                        label = "Flow",
+                        value = profile.flow,
+                        options = listOf("", "xtls-rprx-vision", "xtls-rprx-vision-udp443"),
+                        onSelect = { profile = profile.copy(flow = it) },
+                    )
+                    OutlinedTextField(
+                        value = profile.encryption,
+                        onValueChange = { profile = profile.copy(encryption = it) },
+                        label = { Text("Encryption (default: none)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                }
+
+                Protocol.TUIC -> {
                     OutlinedTextField(
                         value = profile.uuid,
                         onValueChange = { profile = profile.copy(uuid = it) },
@@ -166,18 +189,15 @@ fun ProfileEditSheet(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
-                    OutlinedTextField(
-                        value = profile.alterId.toString(),
-                        onValueChange = {
-                            profile = profile.copy(alterId = it.toIntOrNull() ?: 0)
-                        },
-                        label = { Text("Alter ID") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
+                    SimpleDropdown(
+                        label = "VMess Security",
+                        value = profile.security.ifBlank { "auto" },
+                        options = listOf("auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"),
+                        onSelect = { profile = profile.copy(security = it) },
                     )
                 }
 
-                Protocol.TROJAN, Protocol.HYSTERIA2 -> {
+                Protocol.TROJAN -> {
                     OutlinedTextField(
                         value = profile.password,
                         onValueChange = { profile = profile.copy(password = it) },
@@ -187,13 +207,45 @@ fun ProfileEditSheet(
                     )
                 }
 
-                Protocol.SHADOWSOCKS -> {
+                Protocol.HYSTERIA2 -> {
                     OutlinedTextField(
-                        value = profile.method,
-                        onValueChange = { profile = profile.copy(method = it) },
-                        label = { Text(stringResource(R.string.field_method)) },
+                        value = profile.password,
+                        onValueChange = { profile = profile.copy(password = it) },
+                        label = { Text("Auth Password") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = profile.obfsPassword,
+                        onValueChange = { profile = profile.copy(obfsPassword = it) },
+                        label = { Text("Salamander Obfs Password (optional)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = profile.portHopping,
+                        onValueChange = { profile = profile.copy(portHopping = it) },
+                        label = { Text("Port Hopping (e.g. 20000-50000)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                }
+
+                Protocol.SHADOWSOCKS -> {
+                    SimpleDropdown(
+                        label = stringResource(R.string.field_method),
+                        value = profile.method.ifBlank { "2022-blake3-aes-128-gcm" },
+                        options = listOf(
+                            "2022-blake3-aes-128-gcm",
+                            "2022-blake3-aes-256-gcm",
+                            "2022-blake3-chacha20-poly1305",
+                            "aes-256-gcm",
+                            "aes-128-gcm",
+                            "chacha20-ietf-poly1305",
+                            "xchacha20-ietf-poly1305",
+                            "none",
+                        ),
+                        onSelect = { profile = profile.copy(method = it) },
                     )
                     OutlinedTextField(
                         value = profile.password,
@@ -236,6 +288,16 @@ fun ProfileEditSheet(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
+                    OutlinedTextField(
+                        value = profile.localAddresses.joinToString(","),
+                        onValueChange = {
+                            val list = it.split(",").map { s -> s.trim() }.filter { s -> s.isNotEmpty() }
+                            profile = profile.copy(localAddresses = list)
+                        },
+                        label = { Text("Local Address (e.g. 172.16.0.2/32)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
                 }
 
                 Protocol.SSH -> {
@@ -258,47 +320,63 @@ fun ProfileEditSheet(
                 Protocol.NAIVE, Protocol.CUSTOM, Protocol.DIRECT -> Unit
             }
 
-            // transport + tls apply to the stream protocols only
+            // Stream Transport + TLS / REALITY
             if (profile.protocol in setOf(
-                    Protocol.VLESS, Protocol.VMESS, Protocol.TROJAN, Protocol.SHADOWSOCKS,
+                    Protocol.VLESS, Protocol.VMESS, Protocol.TROJAN, Protocol.SHADOWSOCKS, Protocol.HYSTERIA2,
                 )
             ) {
-                OutlinedTextField(
-                    value = profile.transport.type,
-                    onValueChange = {
-                        profile = profile.copy(transport = profile.transport.copy(type = it))
+                if (profile.protocol != Protocol.HYSTERIA2) {
+                    SimpleDropdown(
+                        label = "Network / Transport",
+                        value = profile.transport.type.ifBlank { "tcp" },
+                        options = listOf("tcp", "ws", "httpupgrade", "xhttp", "grpc", "kcp"),
+                        onSelect = {
+                            profile = profile.copy(transport = profile.transport.copy(type = it))
+                        },
+                    )
+                    OutlinedTextField(
+                        value = profile.transport.host,
+                        onValueChange = {
+                            profile = profile.copy(transport = profile.transport.copy(host = it))
+                        },
+                        label = { Text("Request Host / Authority") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = if (profile.transport.type == "grpc") profile.transport.serviceName else profile.transport.path,
+                        onValueChange = {
+                            profile = if (profile.transport.type == "grpc") {
+                                profile.copy(transport = profile.transport.copy(serviceName = it))
+                            } else {
+                                profile.copy(transport = profile.transport.copy(path = it))
+                            }
+                        },
+                        label = { Text(if (profile.transport.type == "grpc") "gRPC ServiceName" else "Path (e.g. /?ed=2560)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                }
+
+                SimpleDropdown(
+                    label = "Stream Security",
+                    value = when {
+                        profile.tls.reality -> "reality"
+                        profile.tls.enabled -> "tls"
+                        else -> "none"
                     },
-                    label = { Text(stringResource(R.string.field_transport)) },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = profile.transport.host,
-                    onValueChange = {
-                        profile = profile.copy(transport = profile.transport.copy(host = it))
+                    options = listOf("none", "tls", "reality"),
+                    onSelect = { sec ->
+                        profile = profile.copy(
+                            tls = profile.tls.copy(
+                                enabled = sec == "tls" || sec == "reality",
+                                reality = sec == "reality",
+                            ),
+                        )
                     },
-                    label = { Text("Host / SNI") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = profile.transport.path,
-                    onValueChange = {
-                        profile = profile.copy(transport = profile.transport.copy(path = it))
-                    },
-                    label = { Text("Path") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
                 )
 
-                SwitchRow(
-                    label = stringResource(R.string.field_tls),
-                    checked = profile.tls.enabled,
-                    onChange = { on ->
-                        profile = profile.copy(tls = profile.tls.copy(enabled = on))
-                    },
-                )
-                if (profile.tls.enabled) {
+                if (profile.tls.enabled || profile.tls.reality) {
                     OutlinedTextField(
                         value = profile.tls.serverName,
                         onValueChange = {
@@ -308,13 +386,63 @@ fun ProfileEditSheet(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
-                    SwitchRow(
-                        label = stringResource(R.string.field_insecure),
-                        checked = profile.tls.insecure,
-                        onChange = { on ->
-                            profile = profile.copy(tls = profile.tls.copy(insecure = on))
+                    SimpleDropdown(
+                        label = "uTLS Fingerprint",
+                        value = profile.tls.utlsFingerprint.ifBlank { "chrome" },
+                        options = listOf("chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random", "randomized"),
+                        onSelect = {
+                            profile = profile.copy(tls = profile.tls.copy(utls = true, utlsFingerprint = it))
                         },
                     )
+                    OutlinedTextField(
+                        value = alpnText,
+                        onValueChange = {
+                            alpnText = it
+                            val list = it.split(",").map { s -> s.trim() }.filter { s -> s.isNotEmpty() }
+                            profile = profile.copy(tls = profile.tls.copy(alpn = list))
+                        },
+                        label = { Text("ALPN (e.g. h2,http/1.1 or h3)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+
+                    if (profile.tls.reality) {
+                        OutlinedTextField(
+                            value = profile.tls.realityPublicKey,
+                            onValueChange = {
+                                profile = profile.copy(tls = profile.tls.copy(realityPublicKey = it))
+                            },
+                            label = { Text("REALITY Public Key (pbk)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = profile.tls.realityShortId,
+                            onValueChange = {
+                                profile = profile.copy(tls = profile.tls.copy(realityShortId = it))
+                            },
+                            label = { Text("REALITY Short ID (sid)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = profile.tls.realitySpiderX,
+                            onValueChange = {
+                                profile = profile.copy(tls = profile.tls.copy(realitySpiderX = it))
+                            },
+                            label = { Text("REALITY SpiderX (spx)") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                        )
+                    } else {
+                        SwitchRow(
+                            label = stringResource(R.string.field_insecure),
+                            checked = profile.tls.insecure,
+                            onChange = { on ->
+                                profile = profile.copy(tls = profile.tls.copy(insecure = on))
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -371,8 +499,53 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun SimpleDropdown(
+    label: String,
+    value: String,
+    options: List<String>,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        OutlinedTextField(
+            value = value.ifBlank { "none" },
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { opt ->
+                DropdownMenuItem(
+                    text = { Text(opt.ifBlank { "none" }) },
+                    onClick = {
+                        onSelect(opt)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun ProtocolPicker(value: Protocol, onChange: (Protocol) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val supportedProtocols = listOf(
+        Protocol.VLESS,
+        Protocol.VMESS,
+        Protocol.TROJAN,
+        Protocol.SHADOWSOCKS,
+        Protocol.HYSTERIA2,
+        Protocol.WIREGUARD,
+        Protocol.SOCKS,
+        Protocol.HTTP,
+        Protocol.CUSTOM,
+    )
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
         OutlinedTextField(
             value = if (value == Protocol.CUSTOM) "custom (JSON)" else value.wire,
@@ -385,7 +558,7 @@ private fun ProtocolPicker(value: Protocol, onChange: (Protocol) -> Unit) {
                 .fillMaxWidth(),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            Protocol.entries.forEach { protocol ->
+            supportedProtocols.forEach { protocol ->
                 DropdownMenuItem(
                     text = { Text(if (protocol == Protocol.CUSTOM) "custom (JSON)" else protocol.wire) },
                     onClick = {
@@ -402,7 +575,8 @@ private fun defaultPort(protocol: Protocol): Int = when (protocol) {
     Protocol.SSH -> 22
     Protocol.SOCKS -> 1080
     Protocol.HTTP -> 8080
+    Protocol.WIREGUARD -> 51820
     Protocol.SHADOWSOCKS, Protocol.TROJAN, Protocol.VLESS, Protocol.VMESS,
-    Protocol.HYSTERIA2, Protocol.TUIC, Protocol.WIREGUARD, Protocol.NAIVE -> 443
+    Protocol.HYSTERIA2, Protocol.TUIC, Protocol.NAIVE -> 443
     Protocol.CUSTOM, Protocol.DIRECT -> 0
 }

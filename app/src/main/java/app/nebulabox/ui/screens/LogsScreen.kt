@@ -325,7 +325,7 @@ private fun CrashesTab(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "No JVM or Native (libbox.so) crash reports recorded.",
+                        text = "No JVM or Native (Xray-core) crash reports recorded.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -423,7 +423,7 @@ private fun ConfigTab(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Active sing-box v1.14.2 Config",
+                text = "Active Xray-core JSON Config",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,

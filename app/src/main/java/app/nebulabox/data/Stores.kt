@@ -14,18 +14,15 @@ private val Context.profileStore by preferencesDataStore(name = "profiles")
 private val Context.settingsStore by preferencesDataStore(name = "settings")
 
 private val PROFILES_KEY = stringPreferencesKey("profiles")
+private val SUBSCRIPTIONS_KEY = stringPreferencesKey("subscriptions")
 private val SETTINGS_KEY = stringPreferencesKey("settings")
 
 private val kjson = KJson { ignoreUnknownKeys = true; encodeDefaults = true }
 
 private val profileListSerializer = ListSerializer(Profile.serializer())
+private val subscriptionListSerializer = ListSerializer(SubscriptionItem.serializer())
 private val settingsSerializer = AppSettings.serializer()
 
-/**
- * Profiles live as one serialised array. The working set for a personal VPN
- * client is tens of entries, so a single read-modify-write keeps the code
- * small and avoids a database dependency.
- */
 class ProfileStore(private val context: Context) {
 
     val profiles: Flow<List<Profile>> = context.profileStore.data.map { prefs ->
@@ -33,7 +30,58 @@ class ProfileStore(private val context: Context) {
         runCatching { kjson.decodeFromString(profileListSerializer, raw) }.getOrDefault(emptyList())
     }
 
+    val subscriptions: Flow<List<SubscriptionItem>> = context.profileStore.data.map { prefs ->
+        val raw = prefs[SUBSCRIPTIONS_KEY] ?: return@map emptyList()
+        runCatching { kjson.decodeFromString(subscriptionListSerializer, raw) }.getOrDefault(emptyList())
+    }
+
     suspend fun all(): List<Profile> = profiles.first()
+
+    suspend fun allSubscriptions(): List<SubscriptionItem> = subscriptions.first()
+
+    suspend fun upsertSubscription(item: SubscriptionItem) {
+        context.profileStore.edit { prefs ->
+            val raw = prefs[SUBSCRIPTIONS_KEY] ?: "[]"
+            val list = runCatching { kjson.decodeFromString(subscriptionListSerializer, raw) }
+                .getOrDefault(emptyList())
+            val idx = list.indexOfFirst { it.id == item.id }
+            val updated = if (idx >= 0) list.toMutableList().also { it[idx] = item } else list + item
+            prefs[SUBSCRIPTIONS_KEY] = kjson.encodeToString(subscriptionListSerializer, updated)
+        }
+    }
+
+    suspend fun deleteSubscription(subId: String, removeProfiles: Boolean = true) {
+        context.profileStore.edit { prefs ->
+            val rawSubs = prefs[SUBSCRIPTIONS_KEY] ?: "[]"
+            val subs = runCatching { kjson.decodeFromString(subscriptionListSerializer, rawSubs) }
+                .getOrDefault(emptyList())
+            prefs[SUBSCRIPTIONS_KEY] = kjson.encodeToString(
+                subscriptionListSerializer,
+                subs.filterNot { it.id == subId },
+            )
+            if (removeProfiles) {
+                val rawProf = prefs[PROFILES_KEY] ?: "[]"
+                val profs = runCatching { kjson.decodeFromString(profileListSerializer, rawProf) }
+                    .getOrDefault(emptyList())
+                prefs[PROFILES_KEY] = kjson.encodeToString(
+                    profileListSerializer,
+                    profs.filterNot { it.subscriptionId == subId },
+                )
+            }
+        }
+    }
+
+    suspend fun replaceSubscriptionProfiles(subId: String, subUrl: String, newProfiles: List<Profile>) = write { list ->
+        val kept = list.filterNot { it.subscriptionId == subId }
+        val baseOrder = kept.maxOfOrNull { it.order } ?: 0
+        kept + newProfiles.mapIndexed { index, profile ->
+            profile.copy(
+                subscriptionId = subId,
+                subscriptionUrl = subUrl,
+                order = baseOrder + index + 1,
+            )
+        }
+    }
 
     suspend fun upsert(profile: Profile) = write { list ->
         val index = list.indexOfFirst { it.id == profile.id }
@@ -53,6 +101,64 @@ class ProfileStore(private val context: Context) {
 
     suspend fun update(id: String, transform: (Profile) -> Profile) = write { list ->
         list.map { if (it.id == id) transform(it) else it }
+    }
+
+    suspend fun updateDelays(results: Map<String, Int>, testedAt: Long = System.currentTimeMillis()) = write { list ->
+        list.map { p ->
+            val delay = results[p.id]
+            if (delay != null) p.copy(lastDelayMs = delay, lastTestedAt = testedAt) else p
+        }
+    }
+
+    /**
+     * Sorts profiles by ping test results (fastest positive delay first, untested/failed at bottom),
+     * matching v2rayNG's SortByTestResults.
+     */
+    suspend fun sortByTestResults() = write { list ->
+        list.sortedWith(
+            compareBy<Profile> { if (it.lastDelayMs > 0) 0 else 1 }
+                .thenBy { if (it.lastDelayMs > 0) it.lastDelayMs else Int.MAX_VALUE }
+                .thenBy { it.order },
+        ).mapIndexed { idx, p -> p.copy(order = idx) }
+    }
+
+    /**
+     * Removes duplicate profiles based on [Profile.duplicateKey], matching v2rayNG's DeleteDuplicate.
+     * @return Number of duplicates removed.
+     */
+    suspend fun removeDuplicates(): Int {
+        var removedCount = 0
+        write { list ->
+            val seen = HashSet<String>()
+            val unique = ArrayList<Profile>(list.size)
+            for (p in list) {
+                if (seen.add(p.duplicateKey())) {
+                    unique.add(p)
+                } else {
+                    removedCount++
+                }
+            }
+            unique.mapIndexed { idx, p -> p.copy(order = idx) }
+        }
+        return removedCount
+    }
+
+    /**
+     * Removes invalid/timed-out profiles (where lastDelayMs <= 0 after being tested),
+     * matching v2rayNG's DeleteInvalid.
+     * @return Number of invalid profiles removed.
+     */
+    suspend fun removeInvalid(): Int {
+        var removedCount = 0
+        write { list ->
+            val kept = list.filter { p ->
+                val isFailed = p.lastTestedAt > 0L && p.lastDelayMs <= 0
+                if (isFailed) removedCount++
+                !isFailed
+            }
+            kept.mapIndexed { idx, p -> p.copy(order = idx) }
+        }
+        return removedCount
     }
 
     suspend fun move(from: Int, to: Int) = write { list ->

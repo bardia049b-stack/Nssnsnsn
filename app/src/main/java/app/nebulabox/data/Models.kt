@@ -4,8 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * The protocol families the tunnel engine can speak.
- * Every one of these maps onto a real sing-box outbound type (or raw custom JSON).
+ * The protocol families the Xray-core tunnel engine can speak.
  */
 enum class Protocol(val wire: String) {
     @SerialName("vless")
@@ -49,19 +48,26 @@ enum class Protocol(val wire: String) {
 
     companion object {
         fun fromWire(value: String): Protocol? = entries.firstOrNull {
-            it.wire.equals(value, ignoreCase = true)
+            it.wire.equals(value, ignoreCase = true) ||
+                (value.equals("hysteria", ignoreCase = true) && it == HYSTERIA2)
         }
     }
 }
 
-/** TLS transport wrapped around a stream protocol. */
+/** Stream transport wrapped around a proxy protocol. */
 @Serializable
 data class Transport(
-    val type: String = "tcp",          // tcp | ws | http | httpupgrade | quic | grpc
+    val type: String = "tcp",          // tcp | ws | httpupgrade | xhttp | h2 | http | kcp | grpc | quic
     val host: String = "",             // Host header / SNI override
-    val path: String = "",             // ws / http path
+    val path: String = "",             // ws / httpupgrade / xhttp path (preserves ?ed=2048 for Xray)
     val headers: Map<String, String> = emptyMap(),
+    val headerType: String = "none",   // none | http | srtp | utp | wechat-video | dtls | wireguard
     val serviceName: String = "",      // grpc service name
+    val authority: String = "",        // grpc authority
+    val grpcMode: String = "gun",      // gun | multi
+    val xhttpMode: String = "auto",    // auto | packet-up | stream-up | stream-one
+    val xhttpExtra: String = "",
+    val seed: String = "",             // mKCP seed
     val maxEarlyData: Int = 0,
     val earlyDataHeader: String = "",
 )
@@ -77,8 +83,22 @@ data class TlsSettings(
     val reality: Boolean = false,
     val realityPublicKey: String = "",
     val realityShortId: String = "",
+    val realitySpiderX: String = "",
     val utls: Boolean = false,
     val utlsFingerprint: String = "chrome",
+    val echConfigList: String = "",
+    val pinnedCA256: String = "",
+)
+
+/** Subscription group item (aligned with v2rayNG SubscriptionItem). */
+@Serializable
+data class SubscriptionItem(
+    val id: String,
+    val remarks: String,
+    val url: String,
+    val enabled: Boolean = true,
+    val updatedAt: Long = 0L,
+    val userAgent: String = "",
 )
 
 /** A single server or custom JSON configuration the user can connect to. */
@@ -92,17 +112,21 @@ data class Profile(
 
     // authentication, meaning depends on protocol
     val username: String = "",         // socks / http user, ssh user, tuic uuid
-    val password: String = "",         // ss / trojan / socks / ssh password, tuic token
+    val password: String = "",         // ss / trojan / socks / ssh password, tuic token, hysteria2 auth
     val uuid: String = "",             // vless / vmess id
+    val encryption: String = "none",   // vless encryption (default "none")
 
-    // vless / hysteria2 flow control
-    val flow: String = "",             // xtls-rprx-vision
+    // vless / hysteria2 flow control & port hopping
+    val flow: String = "",             // xtls-rprx-vision | xtls-rprx-vision-udp443
     val upMbps: Int = 0,
     val downMbps: Int = 0,
+    val obfsPassword: String = "",     // hysteria2 salamander obfs password
+    val portHopping: String = "",      // hysteria2 mport e.g. "20000-50000"
+    val portHoppingInterval: String = "30",
 
     // vmess specifics
     val alterId: Int = 0,
-    val security: String = "",         // auto | aes-128-gcm | chacha20-poly1305 | none
+    val security: String = "auto",     // auto | aes-128-gcm | chacha20-poly1305 | none | zero
 
     // shadowsocks specifics
     val method: String = "",
@@ -125,9 +149,10 @@ data class Profile(
     val transport: Transport = Transport(),
     val tls: TlsSettings = TlsSettings(),
 
-    // Raw custom sing-box JSON configuration (full config or single outbound)
+    // Raw custom Xray or sing-box JSON configuration (full config or single outbound)
     val customConfig: String = "",
 
+    val subscriptionId: String = "",
     val subscriptionUrl: String = "",
     val remark: String = "",
     var order: Int = 0,
@@ -143,4 +168,33 @@ data class Profile(
                 else -> protocol.wire
             }
         }
+
+    /**
+     * Identity key for deduplication (matches v2rayNG ProfileItem.duplicateIdentity).
+     * Ignores id, name, order, subscriptionId, and lastDelayMs.
+     */
+    fun duplicateKey(): String {
+        if (protocol == Protocol.CUSTOM) {
+            return "custom:${customConfig.trim().hashCode()}"
+        }
+        return listOf(
+            protocol.wire,
+            server.trim().lowercase(),
+            serverPort.toString(),
+            uuid.trim(),
+            password.trim(),
+            username.trim(),
+            method.trim().lowercase(),
+            flow.trim(),
+            transport.type.lowercase(),
+            transport.host.trim().lowercase(),
+            transport.path.trim(),
+            transport.serviceName.trim(),
+            tls.enabled.toString(),
+            tls.reality.toString(),
+            tls.serverName.trim().lowercase(),
+            tls.realityPublicKey.trim(),
+            tls.realityShortId.trim(),
+        ).joinToString("|")
+    }
 }

@@ -1,5 +1,7 @@
 package app.nebulabox.ui.screens
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,20 +19,25 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
-import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.Bolt
+import androidx.compose.material.icons.filled.NetworkCheck
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.RestartAlt
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,8 +50,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.nebulabox.BuildConfig
 import app.nebulabox.R
+import app.nebulabox.data.AppSettings
 import app.nebulabox.data.Profile
 import app.nebulabox.engine.Engines
 import app.nebulabox.engine.TunnelState
@@ -63,24 +70,34 @@ fun HomeScreen(
     val status by viewModel.status.collectAsStateWithLifecycle()
     val location by viewModel.endpointLocation.collectAsStateWithLifecycle()
     val checkingLocation by viewModel.checkingLocation.collectAsStateWithLifecycle()
+    val activeDelayMs by viewModel.activeDelayMs.collectAsStateWithLifecycle()
+    val testingIds by viewModel.testingProfileIds.collectAsStateWithLifecycle()
 
     val selected = profiles.firstOrNull { it.id == settings.selectedProfileId }
         ?: profiles.firstOrNull()
+    val isTestingSelected = checkingLocation || (selected != null && selected.id in testingIds)
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
 
-        Text(
-            text = stringResource(R.string.app_name),
-            style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = stringResource(R.string.app_name),
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            EngineBadge(useHevTun = settings.useHevTun)
+        }
 
         EngineBanner()
 
@@ -89,11 +106,13 @@ fun HomeScreen(
             state = status.state,
             message = status.message,
             location = location,
-            checkingLocation = checkingLocation,
-            onRefreshLocation = { viewModel.refreshLocation() },
+            activeDelayMs = activeDelayMs ?: selected?.lastDelayMs?.takeIf { it > 0 }?.toLong(),
+            checkingLocation = isTestingSelected,
+            onRefreshLocation = { viewModel.testActiveConnectionDelay() },
             onToggle = {
                 if (selected != null) viewModel.toggle(selected)
             },
+            onRestart = { viewModel.restartTunnel() },
             onPickProfile = onOpenProfiles,
         )
 
@@ -105,10 +124,19 @@ fun HomeScreen(
                 downlinkTotal = status.downlinkTotal,
                 startedAt = status.startedAt,
                 memory = status.memory,
-                connectionsIn = status.connectionsIn,
-                connectionsOut = status.connectionsOut,
             )
         }
+
+        QuickXrayControlsCard(
+            settings = settings,
+            connected = status.state == TunnelState.STARTED,
+            onUpdateSettings = { transform ->
+                viewModel.updateSettings(transform)
+                if (status.state == TunnelState.STARTED) {
+                    viewModel.restartTunnel()
+                }
+            },
+        )
 
         ProfilesSummary(
             total = profiles.size,
@@ -116,19 +144,35 @@ fun HomeScreen(
             onOpen = onOpenProfiles,
         )
 
-        Row(modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
-                onClick = onOpenGroups,
-                modifier = Modifier.weight(1f),
-                enabled = status.state == TunnelState.STARTED,
-            ) {
-                Icon(Icons.Filled.Groups, null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(stringResource(R.string.action_groups))
-            }
-        }
+        Spacer(Modifier.height(20.dp))
+    }
+}
 
-        Spacer(Modifier.height(24.dp))
+@Composable
+private fun EngineBadge(useHevTun: Boolean) {
+    val engine = Engines.active.value ?: Engines.obtain()
+    val modeLabel = if (useHevTun) "hev-tun" else "Xray TUN"
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Bolt,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(15.dp),
+            )
+            Text(
+                text = "${engine.implementationName} · $modeLabel",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+        }
     }
 }
 
@@ -152,11 +196,6 @@ private fun EngineBanner() {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onErrorContainer,
             )
-            Text(
-                text = stringResource(R.string.engine_missing_hint),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-            )
         }
     }
 }
@@ -167,9 +206,11 @@ private fun ConnectCard(
     state: TunnelState,
     message: String,
     location: IpLocationChecker.EndpointLocation?,
+    activeDelayMs: Long?,
     checkingLocation: Boolean,
     onRefreshLocation: () -> Unit,
     onToggle: () -> Unit,
+    onRestart: () -> Unit,
     onPickProfile: () -> Unit,
 ) {
     Card {
@@ -178,7 +219,7 @@ private fun ConnectCard(
                 .fillMaxWidth()
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             val running = state == TunnelState.STARTED
             val pending = state == TunnelState.STARTING || state == TunnelState.STOPPING
@@ -190,7 +231,9 @@ private fun ConnectCard(
                     pending -> MaterialTheme.colorScheme.surfaceVariant
                     else -> MaterialTheme.colorScheme.surfaceVariant
                 },
-                modifier = Modifier.size(88.dp),
+                modifier = Modifier
+                    .size(84.dp)
+                    .clickable(enabled = profile != null && !pending) { onToggle() },
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
@@ -225,13 +268,39 @@ private fun ConnectCard(
                 textAlign = TextAlign.Center,
             )
 
-            if (running) {
-                ConnectedLocationBadge(
-                    location = location,
-                    checking = checkingLocation,
-                    onRefresh = onRefreshLocation,
-                )
+            if (profile != null) {
+                val protoInfo = buildString {
+                    append(profile.protocol.wire.uppercase())
+                    if (profile.transport.type.isNotBlank()) {
+                        append(" · ${profile.transport.type.uppercase()}")
+                    }
+                    if (profile.tls.reality) {
+                        append(" · REALITY")
+                    } else if (profile.tls.enabled) {
+                        append(" · TLS")
+                    }
+                }
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                ) {
+                    Text(
+                        text = protoInfo,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                    )
+                }
             }
+
+            // Connected Exit IP & Country OR Real Ping Test Bar (matching v2rayNG bottom bar)
+            ConnectedLocationOrPingBadge(
+                running = running,
+                location = location,
+                activeDelayMs = activeDelayMs,
+                checking = checkingLocation,
+                onTest = onRefreshLocation,
+            )
 
             if (message.isNotBlank() && state == TunnelState.STOPPED) {
                 Text(
@@ -242,23 +311,34 @@ private fun ConnectCard(
                 )
             }
 
-            Button(
-                onClick = onToggle,
-                enabled = profile != null && !pending && Engines.active.value?.functional != false,
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                colors = if (running) {
-                    ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                    )
-                } else {
-                    ButtonDefaults.buttonColors()
-                },
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text(
-                    stringResource(
-                        if (running) R.string.action_disconnect else R.string.action_connect,
-                    ),
-                )
+                Button(
+                    onClick = onToggle,
+                    enabled = profile != null && !pending && Engines.active.value?.functional != false,
+                    modifier = Modifier.weight(1f),
+                    colors = if (running) {
+                        ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                        )
+                    } else {
+                        ButtonDefaults.buttonColors()
+                    },
+                ) {
+                    Text(
+                        stringResource(
+                            if (running) R.string.action_disconnect else R.string.action_connect,
+                        ),
+                    )
+                }
+
+                if (running) {
+                    OutlinedButton(onClick = onRestart) {
+                        Icon(Icons.Filled.RestartAlt, contentDescription = "Restart", modifier = Modifier.size(18.dp))
+                    }
+                }
             }
 
             TextButton(onClick = onPickProfile) {
@@ -269,15 +349,19 @@ private fun ConnectCard(
 }
 
 @Composable
-private fun ConnectedLocationBadge(
+private fun ConnectedLocationOrPingBadge(
+    running: Boolean,
     location: IpLocationChecker.EndpointLocation?,
+    activeDelayMs: Long?,
     checking: Boolean,
-    onRefresh: () -> Unit,
+    onTest: () -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !checking) { onTest() },
     ) {
         Row(
             modifier = Modifier
@@ -291,7 +375,7 @@ private fun ConnectedLocationBadge(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (location != null) {
+                if (running && location != null) {
                     Text(
                         text = location.flagEmoji,
                         style = MaterialTheme.typography.headlineSmall,
@@ -334,14 +418,19 @@ private fun ConnectedLocationBadge(
                     }
                 } else {
                     Icon(
-                        imageVector = Icons.Filled.Public,
+                        imageVector = if (running) Icons.Filled.Public else Icons.Filled.NetworkCheck,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(22.dp),
                     )
                     Column {
                         Text(
-                            text = if (checking) "Detecting exit IP & country…" else "Tap refresh to check exit IP & location",
+                            text = when {
+                                checking -> "Testing real connection delay (HTTP 204)…"
+                                activeDelayMs != null && activeDelayMs > 0 -> "Real Delay: $activeDelayMs ms (Tap to re-test)"
+                                running -> "Tap to check exit IP, country & real delay"
+                                else -> "Tap to test selected server real delay (Xray)"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
@@ -355,15 +444,121 @@ private fun ConnectedLocationBadge(
                 )
             } else {
                 IconButton(
-                    onClick = onRefresh,
+                    onClick = onTest,
                     modifier = Modifier.size(32.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Filled.Refresh,
-                        contentDescription = "Refresh IP Location",
+                        contentDescription = "Test Delay",
                         modifier = Modifier.size(18.dp),
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QuickXrayControlsCard(
+    settings: AppSettings,
+    connected: Boolean,
+    onUpdateSettings: ((AppSettings) -> AppSettings) -> Unit,
+) {
+    Card {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(
+                    text = "Xray Quick Controls",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            }
+
+            // 1. TLS Fragment toggle (essential for Iranian ISPs)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "TLS Fragment & Noise (Anti-DPI)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(
+                        text = "Splits TLS ClientHello (${settings.fragmentPackets}, ${settings.fragmentLength}B)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = settings.fragmentEnabled,
+                    onCheckedChange = { on ->
+                        onUpdateSettings { it.copy(fragmentEnabled = on) }
+                    },
+                )
+            }
+
+            // 2. Routing Mode Quick Chips (Global / Bypass Iran / Rule)
+            Text(
+                text = "Routing Preset",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val modes = listOf(
+                    "global" to "Global (All Proxy)",
+                    "white_iran" to "Bypass Iran (.ir Direct)",
+                    "rule" to "Bypass LAN/CN",
+                )
+                modes.forEach { (key, label) ->
+                    FilterChip(
+                        selected = settings.routeMode == key,
+                        onClick = { onUpdateSettings { it.copy(routeMode = key) } },
+                        label = { Text(label) },
+                    )
+                }
+            }
+
+            // 3. TUN Engine Mode Quick Chips (hev-socks5-tunnel vs Xray Native TUN)
+            Text(
+                text = "TUN Engine",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FilterChip(
+                    selected = settings.useHevTun,
+                    onClick = { onUpdateSettings { it.copy(useHevTun = true) } },
+                    label = { Text("hev-socks5-tunnel (v2rayNG)") },
+                )
+                FilterChip(
+                    selected = !settings.useHevTun,
+                    onClick = { onUpdateSettings { it.copy(useHevTun = false) } },
+                    label = { Text("Xray Native TUN") },
+                )
             }
         }
     }
@@ -377,8 +572,6 @@ private fun TrafficCard(
     downlinkTotal: Long,
     startedAt: Long,
     memory: Long,
-    connectionsIn: Int,
-    connectionsOut: Int,
 ) {
     Card {
         Column(
@@ -410,10 +603,6 @@ private fun TrafficCard(
             ) {
                 Stat(stringResource(R.string.label_uptime), Formatters.duration(startedAt))
                 Stat(stringResource(R.string.label_memory), Formatters.size(memory))
-                Stat(
-                    stringResource(R.string.label_connections),
-                    "$connectionsIn / $connectionsOut",
-                )
             }
         }
     }
@@ -483,14 +672,4 @@ private fun ProfilesSummary(total: Int, selected: Profile?, onOpen: () -> Unit) 
             }
         }
     }
-}
-
-/** Kept so a release build without the core still reports its own version. */
-@Composable
-private fun VersionLabel() {
-    Text(
-        text = "v${BuildConfig.VERSION_NAME}",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
 }

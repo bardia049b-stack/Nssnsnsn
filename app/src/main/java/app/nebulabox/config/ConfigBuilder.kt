@@ -3,755 +3,866 @@ package app.nebulabox.config
 import app.nebulabox.data.AppSettings
 import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
-import app.nebulabox.util.IpLocationChecker
+import app.nebulabox.util.AppLogger
 import app.nebulabox.util.Json
 import app.nebulabox.util.ShareLinkParser
-import org.json.JSONObject
-import java.net.URI
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 
 /**
- * Turns a [Profile] plus [AppSettings] into a sing-box v1.14+ configuration document.
+ * Translates a [Profile] + [AppSettings] pair into an Xray-core v1.260327.1
+ * (`2dust/AndroidLibXrayLite v26.9.30` / `v2rayNG 2.3.10`) JSON configuration.
  *
- * Aligned with v2rayNG (`CoreOutboundBuilder` / `AppConfig`) and NekoBoxForAndroid (`V2RayFmt`):
- *  - Extracts WebSocket `?ed=` early data into `max_early_data` + `early_data_header_name`
- *  - Sets `packet_encoding = "xudp"` on VLESS & VMess outbounds
- *  - Uses DoH (`type = "https"`, port 443) for remote DNS over proxy outbounds so Cloudflare
- *    Workers (`*.workers.dev`) and TCP-only proxies resolve DNS reliably
- *  - Uses `ipv4_only` domain resolution when IPv6 is disabled so Android mobile networks never
- *    attempt dead IPv6 `AAAA` dials
- *  - Exposes local `mixed-in` (`127.0.0.1:10808`) alongside `tun-in` so exit IP, country location,
- *    and real tunnel delay checks work identically to v2rayNG.
+ * Key alignments with v2rayNG (`CoreConfigManager.kt` & `CoreOutboundBuilder.kt`):
+ *  - Simplified flat outbound settings (`address`, `port`, `id`/`password`, `level = 8`)
+ *  - WebSocket path preserves `?ed=2560` so Xray's `WebSocketConfig.Build()` enables 0-RTT early data
+ *  - Pre-resolves outbound proxy server domain via Android system DNS into `dns.hosts`
+ *    and enables `sockopt.domainStrategy = "UseIP"` + `happyEyeballs` (250ms race)
+ *  - Intercepts UDP port 53 via `"protocol": "dns"` (`dns-out`) so TCP-only Cloudflare Workers
+ *    resolve all DNS queries reliably over DoH/TCP
+ *  - Supports Xray `finalmask` TLS Fragment & UDP Noise for bypassing ISP SNI/DPI filtering
+ *  - Supports both `hev-socks5-tunnel` mode (`socks` inbound on 127.0.0.1:10808) and
+ *    Xray Native TUN mode (`"protocol": "tun"` inbound)
  */
 object ConfigBuilder {
 
-    private const val TUN_TAG = "tun-in"
-    private const val MIXED_TAG = "mixed-in"
-    private const val OUT_TAG = "out"
-    private const val DIRECT_TAG = "direct"
-
-    private val LEGACY_INBOUND_FIELDS = setOf(
-        "sniff",
-        "sniff_override_destination",
-        "sniff_timeout",
-        "domain_strategy",
-        "udp_disable_domain_unmapping",
-        "inet4_address",
-        "inet6_address",
-        "inet4_route_address",
-        "inet6_route_address",
-        "inet4_route_exclude_address",
-        "inet6_route_exclude_address",
-        "endpoint_independent_nat",
-        "gso",
-    )
-
     fun build(profile: Profile, settings: AppSettings): String {
-        val normSettings = settings.normalized()
-        val raw = if (profile.protocol == Protocol.CUSTOM || profile.customConfig.isNotBlank()) {
-            buildCustom(profile.customConfig, normSettings)
-        } else {
-            val primaryOutbound = outboundMap(profile, normSettings)
-            buildWithPrimaryOutbound(primaryOutbound, OUT_TAG, normSettings)
+        val s = settings.normalized()
+        if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
+            return buildCustomConfig(profile, s, forSpeedtest = false)
         }
-        return prettyJson(raw)
+        return buildStandardXrayConfig(profile, s, forSpeedtest = false)
     }
 
-    private fun prettyJson(raw: String): String =
-        runCatching { JSONObject(raw).toString(2) }.getOrDefault(raw)
+    /**
+     * Generates a lightweight Xray config with no inbounds for `Libv2ray.measureOutboundDelay`,
+     * matching v2rayNG's `CoreConfigManager.getV2rayConfig4Speedtest`.
+     */
+    fun buildForSpeedtest(profile: Profile, settings: AppSettings): String {
+        val s = settings.normalized()
+        if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
+            return buildCustomConfig(profile, s, forSpeedtest = true)
+        }
+        return buildStandardXrayConfig(profile, s, forSpeedtest = true)
+    }
 
-    private fun effectiveMtu(mtu: Int): Int =
-        if (mtu in 1280..1500) mtu else 1500
-
-    private fun effectiveDnsStrategy(settings: AppSettings): String =
-        if (!settings.ipv6) "ipv4_only" else settings.dnsStrategy.ifBlank { "prefer_ipv4" }
-
-    private fun buildWithPrimaryOutbound(
-        primaryOutbound: Map<String, Any?>,
-        primaryTag: String,
+    private fun buildStandardXrayConfig(
+        profile: Profile,
         settings: AppSettings,
+        forSpeedtest: Boolean,
     ): String {
-        val outbounds = mutableListOf<Map<String, Any?>>()
-        outbounds += primaryOutbound
-        if (primaryOutbound["type"] != "direct") {
-            outbounds += mapOf("type" to "direct", "tag" to DIRECT_TAG)
+        val dnsHosts = linkedMapOf<String, Any?>(
+            "domain:googleapis.cn" to "googleapis.com",
+        )
+
+        val proxyOutbound = buildOutbound(profile, settings, dnsHosts)
+        val directOutbound = Json.obj(
+            "tag" to "direct",
+            "protocol" to "freedom",
+            "settings" to emptyMap<String, Any?>(),
+            "streamSettings" to Json.obj(
+                "sockopt" to Json.obj(
+                    "domainStrategy" to "UseIP",
+                    "happyEyeballs" to Json.obj(
+                        "tryDelayMs" to 250,
+                        "interleave" to 2,
+                    ),
+                ),
+            ),
+        )
+        val blockOutbound = Json.obj(
+            "tag" to "block",
+            "protocol" to "blackhole",
+            "settings" to Json.obj(
+                "response" to Json.obj("type" to "http"),
+            ),
+        )
+        val dnsOutbound = Json.obj(
+            "tag" to "dns-out",
+            "protocol" to "dns",
+        )
+
+        val outbounds = if (forSpeedtest) {
+            listOf(proxyOutbound, directOutbound, blockOutbound)
+        } else {
+            listOf(proxyOutbound, directOutbound, blockOutbound, dnsOutbound)
         }
 
+        val root = linkedMapOf<String, Any?>()
+        root["remarks"] = profile.displayName
+        root["log"] = Json.obj(
+            "loglevel" to if (forSpeedtest) "error" else settings.logLevel,
+        )
+
+        if (!forSpeedtest) {
+            root["stats"] = emptyMap<String, Any?>()
+            root["policy"] = Json.obj(
+                "levels" to Json.obj(
+                    "8" to Json.obj(
+                        "handshake" to 4,
+                        "connIdle" to 300,
+                        "uplinkOnly" to 1,
+                        "downlinkOnly" to 1,
+                    ),
+                ),
+                "system" to Json.obj(
+                    "statsOutboundUplink" to true,
+                    "statsOutboundDownlink" to true,
+                ),
+            )
+            root["inbounds"] = buildInbounds(settings)
+            if (settings.fakeDns) {
+                root["fakedns"] = listOf(
+                    Json.obj(
+                        "ipPool" to "198.18.0.0/15",
+                        "poolSize" to 10000,
+                    ),
+                )
+            }
+        }
+
+        root["dns"] = buildDns(settings, dnsHosts)
+        root["outbounds"] = outbounds
+        root["routing"] = buildRouting(settings, forSpeedtest)
+
+        return Json.any(root)
+    }
+
+    // --------------------------------------------------------------- Inbounds
+
+    private fun buildInbounds(settings: AppSettings): List<Map<String, Any?>> {
+        val list = mutableListOf<Map<String, Any?>>()
+        val sniffingEnabled = settings.sniffing || settings.fakeDns
+        val destOverride = mutableListOf<String>()
+        if (settings.sniffing) {
+            destOverride.addAll(listOf("http", "tls", "quic"))
+        }
+        if (settings.fakeDns) {
+            if (settings.sniffing) {
+                destOverride.add("fakedns+others")
+                destOverride.remove("http")
+                destOverride.remove("tls")
+                destOverride.remove("quic")
+            } else {
+                destOverride.add("fakedns")
+            }
+        }
+
+        val sniffingObj = Json.obj(
+            "enabled" to sniffingEnabled,
+            "destOverride" to destOverride.ifEmpty { listOf("http", "tls", "quic") },
+            "routeOnly" to settings.routeOnly,
+        )
+
+        // 1. Local SOCKS5 + HTTP proxy inbound (v2rayNG default port 10808)
+        list.add(
+            Json.obj(
+                "tag" to "socks",
+                "port" to settings.socksPort,
+                "listen" to if (settings.allowLan) "0.0.0.0" else "127.0.0.1",
+                "protocol" to "socks",
+                "settings" to Json.obj(
+                    "auth" to "noauth",
+                    "udp" to true,
+                    "userLevel" to 8,
+                ),
+                "sniffing" to sniffingObj,
+            ),
+        )
+
+        // 2. Native Xray TUN inbound (used when useHevTun == false)
+        if (!settings.useHevTun) {
+            list.add(
+                Json.obj(
+                    "tag" to "tun",
+                    "port" to 0,
+                    "protocol" to "tun",
+                    "settings" to Json.obj(
+                        "name" to "xray0",
+                        "MTU" to settings.mtu,
+                        "userLevel" to 8,
+                    ),
+                    "sniffing" to sniffingObj,
+                ),
+            )
+        }
+
+        return list
+    }
+
+    // ------------------------------------------------------------------- DNS
+
+    private fun buildDns(
+        settings: AppSettings,
+        dnsHosts: Map<String, Any?>,
+    ): Map<String, Any?> {
+        val servers = mutableListOf<Any?>()
+        if (settings.fakeDns) {
+            servers.add("fakedns")
+        }
+
+        val remote = settings.remoteDns.trim().ifBlank { "https://cloudflare-dns.com/dns-query" }
+        servers.add(remote)
+
+        val direct = settings.directDns.trim().ifBlank { "8.8.8.8" }
+        if (settings.routeMode == "white_iran") {
+            servers.add(
+                Json.obj(
+                    "address" to direct,
+                    "domains" to listOf("geosite:ir", "regexp:.*\\.ir$"),
+                    "skipFallback" to true,
+                    "tag" to "domestic-dns",
+                ),
+            )
+        } else if (settings.bypassChina) {
+            servers.add(
+                Json.obj(
+                    "address" to direct,
+                    "domains" to listOf("geosite:cn"),
+                    "skipFallback" to true,
+                    "tag" to "domestic-dns",
+                ),
+            )
+        } else {
+            servers.add(direct)
+        }
+
+        val queryStrategy = when {
+            !settings.ipv6 || settings.dnsStrategy == "ipv4_only" -> "UseIPv4"
+            settings.dnsStrategy == "ipv6_only" -> "UseIPv6"
+            else -> "UseIP"
+        }
+
+        return Json.obj(
+            "hosts" to dnsHosts,
+            "servers" to servers,
+            "queryStrategy" to queryStrategy,
+            "tag" to "dns-module",
+        )
+    }
+
+    // --------------------------------------------------------------- Routing
+
+    private fun buildRouting(
+        settings: AppSettings,
+        forSpeedtest: Boolean,
+    ): Map<String, Any?> {
         val rules = mutableListOf<Map<String, Any?>>()
-        rules += mapOf("action" to "sniff")
-        rules += mapOf("protocol" to "dns", "action" to "hijack-dns")
+
+        if (!forSpeedtest) {
+            // Route UDP port 53 DNS packets through Xray's internal dns-out handler
+            // so DNS resolves reliably over TCP/DoH even when the proxy server is TCP-only (e.g. Cloudflare Workers)
+            rules.add(
+                Json.obj(
+                    "type" to "field",
+                    "port" to "53",
+                    "network" to "udp",
+                    "outboundTag" to "dns-out",
+                ),
+            )
+        }
+
+        // Route Xray's remote DNS module through proxy, domestic DNS through direct
+        rules.add(
+            Json.obj(
+                "type" to "field",
+                "inboundTag" to listOf("dns-module"),
+                "outboundTag" to "proxy",
+            ),
+        )
+        rules.add(
+            Json.obj(
+                "type" to "field",
+                "inboundTag" to listOf("domestic-dns"),
+                "outboundTag" to "direct",
+            ),
+        )
+
+        if (settings.blockAds) {
+            rules.add(
+                Json.obj(
+                    "type" to "field",
+                    "domain" to listOf("geosite:category-ads-all"),
+                    "outboundTag" to "block",
+                ),
+            )
+        }
 
         if (settings.bypassLan) {
-            rules += mapOf(
-                "ip_is_private" to true,
-                "outbound" to DIRECT_TAG,
+            rules.add(
+                Json.obj(
+                    "type" to "field",
+                    "ip" to listOf("geoip:private"),
+                    "outboundTag" to "direct",
+                ),
+            )
+            rules.add(
+                Json.obj(
+                    "type" to "field",
+                    "domain" to listOf("geosite:private"),
+                    "outboundTag" to "direct",
+                ),
             )
         }
 
-        if (settings.blockAds) {
-            rules += mapOf(
-                "rule_set" to listOf("geosite-category-ads-all"),
-                "action" to "reject",
-            )
-        }
-
-        if (settings.bypassChina) {
-            rules += mapOf(
-                "rule_set" to listOf("geoip-cn", "geosite-cn"),
-                "outbound" to DIRECT_TAG,
-            )
-        }
-
-        if (settings.routeMode == "direct") {
-            rules += mapOf("network" to listOf("tcp", "udp"), "outbound" to DIRECT_TAG)
-        }
-
-        val ruleSets = mutableListOf<Map<String, Any?>>()
-        if (settings.blockAds) {
-            ruleSets += mapOf(
-                "type" to "remote",
-                "tag" to "geosite-category-ads-all",
-                "format" to "binary",
-                "url" to "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-category-ads-all.srs",
-            )
-        }
-        if (settings.bypassChina) {
-            ruleSets += mapOf(
-                "type" to "remote",
-                "tag" to "geoip-cn",
-                "format" to "binary",
-                "url" to "https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs",
-            )
-            ruleSets += mapOf(
-                "type" to "remote",
-                "tag" to "geosite-cn",
-                "format" to "binary",
-                "url" to "https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-cn.srs",
-            )
-        }
-
-        val tun = defaultTunInbound(settings)
-        val mixed = defaultMixedInbound()
-        val strategy = effectiveDnsStrategy(settings)
-
-        val dns = mutableMapOf<String, Any?>(
-            "servers" to listOf(
-                buildRemoteDnsServer(settings.remoteDns, "remote", primaryTag, domainResolver = "local"),
-                buildDirectDnsServer(settings.directDns, "local"),
-            ),
-            "final" to "remote",
-            "strategy" to strategy,
-        )
-
-        val defaultResolver = mapOf(
-            "server" to "local",
-            "strategy" to strategy,
-        )
-
-        val route = mutableMapOf<String, Any?>(
-            "rules" to rules,
-            "auto_detect_interface" to true,
-            "default_domain_resolver" to defaultResolver,
-            "final" to primaryTag,
-        )
-        if (ruleSets.isNotEmpty()) {
-            route["rule_set"] = ruleSets
-        }
-
-        val log = mapOf(
-            "level" to settings.logLevel.ifBlank { "info" },
-            "timestamp" to true,
-        )
-
-        val result = LinkedHashMap<String, Any?>()
-        result["log"] = log
-        result["dns"] = dns
-        result["inbounds"] = listOf(tun, mixed)
-        result["outbounds"] = outbounds
-        result["route"] = route
-
-        return Json.obj(*result.map { (k, v) -> k to v }.toTypedArray())
-    }
-
-    private fun defaultTunAddresses(settings: AppSettings): List<String> {
-        val address = mutableListOf<String>()
-        address += "172.19.0.1/30"
-        if (settings.ipv6) address += "fdfe:dcba:9876::1/126"
-        return address
-    }
-
-    private fun defaultTunInbound(settings: AppSettings): Map<String, Any?> = mapOf(
-        "type" to "tun",
-        "tag" to TUN_TAG,
-        "interface_name" to "tun0",
-        "address" to defaultTunAddresses(settings),
-        "auto_route" to true,
-        "strict_route" to false,
-        "stack" to "mixed",
-        "mtu" to effectiveMtu(settings.mtu),
-    )
-
-    private fun defaultMixedInbound(): Map<String, Any?> = mapOf(
-        "type" to "mixed",
-        "tag" to MIXED_TAG,
-        "listen" to "127.0.0.1",
-        "listen_port" to IpLocationChecker.LOCAL_MIXED_PORT,
-    )
-
-    /**
-     * Builds the remote (proxied) DNS server entry.
-     * Just like v2rayNG (`DNS_PROXY = "https://cloudflare-dns.com/dns-query"`), we use DoH
-     * (`type = "https"`, port 443) over the proxy outbound so TCP-only proxies and Cloudflare
-     * Workers (`*.workers.dev`) resolve DNS reliably without needing UDP or port 853.
-     */
-    private fun buildRemoteDnsServer(
-        rawAddress: String,
-        tag: String,
-        detour: String?,
-        domainResolver: String? = null,
-    ): Map<String, Any?> {
-        val addr = rawAddress.trim()
-        val normalized = when {
-            addr.isBlank() || addr == "1.1.1.1" || addr == "tls://1.1.1.1" ->
-                "https://1.1.1.1/dns-query"
-            addr == "8.8.8.8" || addr == "tls://8.8.8.8" ->
-                "https://8.8.8.8/dns-query"
-            else -> addr
-        }
-        return buildDnsServer(normalized, tag, detour, domainResolver)
-    }
-
-    private fun buildDirectDnsServer(
-        rawAddress: String,
-        tag: String,
-    ): Map<String, Any?> {
-        val addr = rawAddress.trim().ifBlank { "8.8.8.8" }
-        val clean = if (addr == "1.1.1.1") "8.8.8.8" else addr
-        return buildDnsServer(clean, tag, detour = null, domainResolver = null)
-    }
-
-    /**
-     * Converts a user-supplied DNS string (e.g. `8.8.8.8`, `https://1.1.1.1/dns-query`,
-     * `tls://8.8.8.8`, `tcp://1.1.1.1`, `local`) into a sing-box v1.14 DNS server object.
-     */
-    private fun buildDnsServer(
-        rawAddress: String,
-        tag: String,
-        detour: String?,
-        domainResolver: String? = null,
-    ): Map<String, Any?> {
-        val addr = rawAddress.trim().ifBlank { "8.8.8.8" }
-        val map = LinkedHashMap<String, Any?>()
-
-        when {
-            addr.equals("local", ignoreCase = true) || addr.startsWith("local://", true) -> {
-                map["type"] = "local"
-                map["tag"] = tag
-            }
-            addr.equals("fakeip", ignoreCase = true) -> {
-                map["type"] = "fakeip"
-                map["tag"] = tag
-                map["inet4_range"] = "198.18.0.0/15"
-                map["inet6_range"] = "fc00::/18"
-            }
-            addr.startsWith("https://", true) || addr.startsWith("h3://", true) -> {
-                val isH3 = addr.startsWith("h3://", true)
-                val normalized = if (isH3) "https://" + addr.substringAfter("://") else addr
-                val uri = runCatching { URI(normalized) }.getOrNull()
-                val host = uri?.host?.ifBlank { "1.1.1.1" } ?: "1.1.1.1"
-                val port = if (uri != null && uri.port > 0) uri.port else 443
-                val path = uri?.path?.takeIf { it.isNotBlank() } ?: "/dns-query"
-                map["type"] = if (isH3) "h3" else "https"
-                map["tag"] = tag
-                map["server"] = host
-                map["server_port"] = port
-                map["path"] = path
-            }
-            addr.startsWith("tls://", true) || addr.startsWith("quic://", true) ||
-                addr.startsWith("tcp://", true) || addr.startsWith("udp://", true) -> {
-                val scheme = addr.substringBefore("://").lowercase()
-                val rest = addr.substringAfter("://").substringBefore("/")
-                val host = rest.substringBefore(":")
-                val port = rest.substringAfter(":", "").toIntOrNull()
-                map["type"] = scheme
-                map["tag"] = tag
-                map["server"] = host.ifBlank { "8.8.8.8" }
-                if (port != null) map["server_port"] = port
-            }
-            else -> {
-                val clean = addr.substringBefore("/")
-                val host = clean.substringBefore(":")
-                val port = clean.substringAfter(":", "").toIntOrNull()
-                map["type"] = "udp"
-                map["tag"] = tag
-                map["server"] = host.ifBlank { "8.8.8.8" }
-                if (port != null) map["server_port"] = port
-            }
-        }
-
-        if (!detour.isNullOrBlank() && map["type"] != "local" && map["type"] != "hosts" && map["type"] != "fakeip") {
-            map["detour"] = detour
-        }
-        if (!domainResolver.isNullOrBlank() && domainResolver != tag && map["server"]?.toString()?.any { it.isLetter() } == true) {
-            map["domain_resolver"] = domainResolver
-        }
-        return map
-    }
-
-    /**
-     * Sanitize an outbound map from a custom JSON config (strips legacy fields and
-     * normalizes WebSocket `?ed=` early data).
-     */
-    @Suppress("UNCHECKED_CAST")
-    private fun sanitizeCustomOutbound(ob: Map<String, Any?>): Map<String, Any?> {
-        val copy = LinkedHashMap(ob)
-        LEGACY_INBOUND_FIELDS.forEach { copy.remove(it) }
-        val transport = copy["transport"] as? Map<String, Any?>
-        if (transport != null && transport["type"]?.toString() == "ws") {
-            val rawPath = transport["path"]?.toString().orEmpty()
-            if (rawPath.contains("?ed=")) {
-                val tCopy = LinkedHashMap(transport)
-                val (cleanPath, ed, eh) = ShareLinkParser.extractWsEarlyData(
-                    rawPath = rawPath,
-                    explicitEd = (tCopy["max_early_data"] as? Number)?.toInt() ?: 0,
-                    explicitEh = tCopy["early_data_header_name"]?.toString().orEmpty(),
+        when (settings.routeMode) {
+            "white_iran" -> {
+                // v2rayNG custom_routing_white_iran preset
+                rules.add(
+                    Json.obj(
+                        "type" to "field",
+                        "ip" to listOf("geoip:ir"),
+                        "outboundTag" to "direct",
+                    ),
                 )
-                tCopy["path"] = cleanPath
-                if (ed > 0) {
-                    tCopy["max_early_data"] = ed
-                    tCopy["early_data_header_name"] = eh
-                }
-                copy["transport"] = tCopy
+                rules.add(
+                    Json.obj(
+                        "type" to "field",
+                        "domain" to listOf(
+                            "geosite:ir",
+                            "regexp:.*\\.ir$",
+                            "ext:iran.dat:ir",
+                        ).filter { !it.startsWith("ext:") },
+                        "outboundTag" to "direct",
+                    ),
+                )
             }
-        }
-        return copy
-    }
 
-    /**
-     * Builds a runnable sing-box v1.14 configuration from a Custom JSON string.
-     */
-    @Suppress("UNCHECKED_CAST")
-    private fun buildCustom(rawJson: String, settings: AppSettings): String {
-        val trimmed = rawJson.trim()
-        val parsed = Json.miniMap(trimmed)
-        if (parsed.isEmpty()) return trimmed
-
-        // Case 1: Single outbound JSON object (has "type" but no "outbounds"/"endpoints")
-        if (!parsed.containsKey("outbounds") && !parsed.containsKey("endpoints") && parsed.containsKey("type")) {
-            val outbound = LinkedHashMap(sanitizeCustomOutbound(parsed))
-            val tag = (outbound["tag"] as? String)?.ifBlank { OUT_TAG } ?: OUT_TAG
-            outbound["tag"] = tag
-            return buildWithPrimaryOutbound(outbound, tag, settings)
-        }
-
-        // Case 2: Full sing-box config JSON
-        val root = LinkedHashMap<String, Any?>(parsed)
-
-        val rawOutbounds = (root["outbounds"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
-        val removedDnsTags = mutableSetOf("dns-out")
-        val removedBlockTags = mutableSetOf("block", "block-out")
-        val cleanedOutbounds = mutableListOf<Map<String, Any?>>()
-
-        for (ob in rawOutbounds) {
-            val type = ob["type"]?.toString()?.lowercase() ?: ""
-            val tag = ob["tag"]?.toString() ?: ""
-            when (type) {
-                "dns" -> {
-                    if (tag.isNotEmpty()) removedDnsTags += tag
-                }
-                "block" -> {
-                    if (tag.isNotEmpty()) removedBlockTags += tag
-                }
-                else -> {
-                    cleanedOutbounds += sanitizeCustomOutbound(ob)
+            "rule" -> {
+                if (settings.bypassChina) {
+                    rules.add(
+                        Json.obj(
+                            "type" to "field",
+                            "ip" to listOf("geoip:cn"),
+                            "outboundTag" to "direct",
+                        ),
+                    )
+                    rules.add(
+                        Json.obj(
+                            "type" to "field",
+                            "domain" to listOf("geosite:cn"),
+                            "outboundTag" to "direct",
+                        ),
+                    )
                 }
             }
-        }
-        if (cleanedOutbounds.none { it["type"] == "direct" }) {
-            cleanedOutbounds += mapOf("type" to "direct", "tag" to DIRECT_TAG)
-        }
-        val directTag = cleanedOutbounds.firstOrNull { it["type"] == "direct" }?.get("tag")?.toString() ?: DIRECT_TAG
-        val primaryProxyTag = cleanedOutbounds.firstOrNull {
-            it["type"] != "direct" && it["type"] != "block" && it["type"] != "dns"
-        }?.get("tag")?.toString() ?: directTag
 
-        val finalOutbounds = cleanedOutbounds.map { ob ->
-            val copy = LinkedHashMap(ob)
-            if (copy["detour"]?.toString() == directTag) {
-                copy.remove("detour")
-            }
-            copy
-        }
-        if (rawOutbounds.isNotEmpty()) {
-            root["outbounds"] = finalOutbounds
-        }
-
-        val rawInbounds = (root["inbounds"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
-        val hasTun = rawInbounds.any { it["type"] == "tun" }
-        val hasMixed = rawInbounds.any {
-            (it["listen_port"] as? Number)?.toInt() == IpLocationChecker.LOCAL_MIXED_PORT
-        }
-        val updatedInbounds = mutableListOf<Map<String, Any?>>()
-        if (!hasTun) {
-            updatedInbounds += defaultTunInbound(settings)
-        }
-        for (ib in rawInbounds) {
-            val ibCopy = LinkedHashMap(ib)
-            LEGACY_INBOUND_FIELDS.forEach { ibCopy.remove(it) }
-            if (ibCopy["type"] == "tun") {
-                ibCopy["interface_name"] = "tun0"
-                ibCopy["address"] = defaultTunAddresses(settings)
-                ibCopy["auto_route"] = true
-                ibCopy["strict_route"] = false
-                ibCopy["stack"] = ibCopy["stack"] ?: "mixed"
-                val rawMtu = (ibCopy["mtu"] as? Number)?.toInt() ?: settings.mtu
-                ibCopy["mtu"] = effectiveMtu(rawMtu)
-            }
-            updatedInbounds += ibCopy
-        }
-        if (!hasMixed) {
-            updatedInbounds += defaultMixedInbound()
-        }
-        root["inbounds"] = updatedInbounds
-
-        // Migrate legacy DNS config to sing-box 1.14 format if present
-        val rawDns = root["dns"] as? Map<String, Any?>
-        var localDnsTag: String? = null
-        if (rawDns != null) {
-            val dnsCopy = LinkedHashMap(rawDns)
-            dnsCopy.remove("independent_cache")
-            dnsCopy.remove("fakeip")
-            dnsCopy["strategy"] = effectiveDnsStrategy(settings)
-
-            val rawServers = (dnsCopy["servers"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }
-            if (rawServers != null) {
-                val migratedServers = mutableListOf<Map<String, Any?>>()
-                val rcodeBlockedTags = mutableSetOf<String>()
-
-                for ((idx, srv) in rawServers.withIndex()) {
-                    val tag = srv["tag"]?.toString() ?: "dns-$idx"
-                    val legacyAddr = srv["address"]?.toString()
-                    if (legacyAddr != null) {
-                        if (legacyAddr.startsWith("rcode://", true) || legacyAddr.equals("block", true)) {
-                            rcodeBlockedTags += tag
-                            continue
-                        }
-                        val detour = srv["detour"]?.toString()?.takeIf {
-                            it.isNotBlank() && it != directTag && it !in removedDnsTags && it !in removedBlockTags
-                        }
-                        val addrResolver = (srv["domain_resolver"] ?: srv["address_resolver"])?.toString()
-                        val migrated = if (detour != null) {
-                            buildRemoteDnsServer(legacyAddr, tag, detour, addrResolver)
-                        } else {
-                            buildDnsServer(legacyAddr, tag, null, addrResolver)
-                        }
-                        if (detour == null || migrated["type"] == "local") {
-                            if (localDnsTag == null && migrated["type"] != "fakeip") localDnsTag = tag
-                        }
-                        migratedServers += migrated
-                    } else {
-                        val srvCopy = LinkedHashMap(srv)
-                        srvCopy.remove("address_resolver")
-                        srvCopy.remove("address_strategy")
-                        srvCopy.remove("strategy")
-                        val detour = srvCopy["detour"]?.toString()
-                        if (detour == directTag || detour in removedDnsTags || detour in removedBlockTags) {
-                            srvCopy.remove("detour")
-                        }
-                        val type = srvCopy["type"]?.toString() ?: "udp"
-                        srvCopy["type"] = type
-                        if (type != "local" && type != "hosts" && type != "fakeip" && !srvCopy.containsKey("server")) {
-                            srvCopy["server"] = "8.8.8.8"
-                        }
-                        if (type == "local" || srvCopy["detour"] == null) {
-                            if (localDnsTag == null && type != "hosts" && type != "fakeip") {
-                                localDnsTag = tag
-                            }
-                        }
-                        migratedServers += srvCopy
-                    }
-                }
-                if (localDnsTag == null) {
-                    localDnsTag = "local-dns-auto"
-                    migratedServers += buildDirectDnsServer(settings.directDns, localDnsTag)
-                }
-                dnsCopy["servers"] = migratedServers
-
-                val rawDnsRules = (dnsCopy["rules"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }
-                if (rawDnsRules != null) {
-                    val migratedDnsRules = rawDnsRules.mapNotNull { rule ->
-                        if (rule.containsKey("outbound")) return@mapNotNull null
-                        val ruleCopy = LinkedHashMap(rule)
-                        ruleCopy.remove("geosite")
-                        ruleCopy.remove("geoip")
-                        ruleCopy.remove("source_geoip")
-                        ruleCopy.remove("rule_set_ip_cidr_accept_empty")
-                        ruleCopy.remove("rule_set_ipcidr_match_source")
-                        val targetServer = ruleCopy["server"]?.toString()
-                        if (targetServer != null && (targetServer in rcodeBlockedTags || targetServer in removedBlockTags)) {
-                            ruleCopy.remove("server")
-                            ruleCopy["action"] = "reject"
-                        }
-                        val condKeys = ruleCopy.keys - setOf("action", "server", "disable_cache", "rewrite_ttl", "client_subnet", "type", "invert", "method", "no_drop")
-                        if (condKeys.isEmpty()) null else ruleCopy
-                    }
-                    dnsCopy["rules"] = migratedDnsRules
-                }
-            }
-            root["dns"] = dnsCopy
-        }
-
-        val rawRoute = (root["route"] as? Map<String, Any?>) ?: emptyMap()
-        val routeCopy = LinkedHashMap(rawRoute)
-        routeCopy["auto_detect_interface"] = true
-        routeCopy.remove("geoip")
-        routeCopy.remove("geosite")
-        if (!routeCopy.containsKey("default_domain_resolver") && localDnsTag != null) {
-            routeCopy["default_domain_resolver"] = mapOf(
-                "server" to localDnsTag,
-                "strategy" to effectiveDnsStrategy(settings),
-            )
-        }
-        if (!routeCopy.containsKey("final")) {
-            routeCopy["final"] = primaryProxyTag
-        }
-
-        val rawRules = (routeCopy["rules"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
-        val migratedRules = mutableListOf<Map<String, Any?>>()
-        var hasSniff = false
-        var hasDnsHijack = false
-
-        for (rule in rawRules) {
-            val ruleCopy = LinkedHashMap(rule)
-            ruleCopy.remove("geosite")
-            ruleCopy.remove("geoip")
-            ruleCopy.remove("source_geoip")
-            ruleCopy.remove("rule_set_ipcidr_match_source")
-
-            val action = ruleCopy["action"]?.toString()
-            val ob = ruleCopy["outbound"]?.toString()
-            if (action == "sniff") {
-                hasSniff = true
-                migratedRules += ruleCopy
-                continue
-            }
-            if (action == "hijack-dns" || ruleCopy["protocol"] == "dns") {
-                hasDnsHijack = true
-            }
-
-            if (ob != null && (ob in removedDnsTags || ruleCopy["protocol"] == "dns")) {
-                ruleCopy.remove("outbound")
-                ruleCopy["action"] = "hijack-dns"
-                hasDnsHijack = true
-            } else if (ob != null && ob in removedBlockTags) {
-                ruleCopy.remove("outbound")
-                ruleCopy["action"] = "reject"
-            }
-
-            val condKeys = ruleCopy.keys - setOf("action", "outbound", "type", "invert", "method", "no_drop", "sniffer", "timeout", "strategy")
-            if (condKeys.isNotEmpty() || ruleCopy["action"] == "sniff" || ruleCopy["action"] == "hijack-dns") {
-                migratedRules += ruleCopy
+            "direct" -> {
+                rules.add(
+                    Json.obj(
+                        "type" to "field",
+                        "network" to "tcp,udp",
+                        "outboundTag" to "direct",
+                    ),
+                )
             }
         }
 
-        if (!hasSniff) {
-            migratedRules.add(0, mapOf("action" to "sniff"))
-        }
-        if (!hasDnsHijack) {
-            migratedRules.add(1, mapOf("protocol" to "dns", "action" to "hijack-dns"))
-        }
-        routeCopy["rules"] = migratedRules
-        root["route"] = routeCopy
-
-        val rawExp = root["experimental"] as? Map<String, Any?>
-        if (rawExp != null) {
-            val expCopy = LinkedHashMap(rawExp)
-            val cacheFile = expCopy["cache_file"] as? Map<String, Any?>
-            if (cacheFile != null && cacheFile.containsKey("store_rdrc")) {
-                val cfCopy = LinkedHashMap(cacheFile)
-                val storeRdrc = cfCopy.remove("store_rdrc")
-                if (storeRdrc == true) cfCopy["store_dns"] = true
-                expCopy["cache_file"] = cfCopy
-            }
-            root["experimental"] = expCopy
-        }
-
-        return Json.obj(*root.map { (k, v) -> k to v }.toTypedArray())
-    }
-
-    /** Validates that the document is well formed before handing it to the core. */
-    fun validate(config: String): String? {
-        val parsed = Json.miniMap(config)
-        if (parsed.isEmpty()) return "configuration is empty or invalid JSON"
-        val outbounds = parsed["outbounds"] as? List<*>
-        val endpoints = parsed["endpoints"] as? List<*>
-        if (outbounds.isNullOrEmpty() && endpoints.isNullOrEmpty()) {
-            return "missing outbounds in configuration"
-        }
-        return null
-    }
-
-    private fun outboundMap(profile: Profile, settings: AppSettings): Map<String, Any?> {
-        val base = mutableListOf<Pair<String, Any?>>(
-            "tag" to OUT_TAG,
-            "type" to profile.protocol.wire,
+        // Catch-all rule -> proxy (matches v2rayNG default catch-all)
+        rules.add(
+            Json.obj(
+                "type" to "field",
+                "network" to "tcp,udp",
+                "outboundTag" to "proxy",
+            ),
         )
 
-        if (profile.server.isNotBlank()) {
-            base += "server" to profile.server
-            base += "server_port" to profile.serverPort
+        return Json.obj(
+            "domainStrategy" to settings.domainStrategy.ifBlank { "AsIs" },
+            "rules" to rules,
+        )
+    }
+
+    // -------------------------------------------------------------- Outbound
+
+    private fun buildOutbound(
+        p: Profile,
+        settings: AppSettings,
+        dnsHosts: MutableMap<String, Any?>,
+    ): Map<String, Any?> {
+        if (p.protocol == Protocol.DIRECT) {
+            return Json.obj("tag" to "proxy", "protocol" to "freedom")
         }
 
-        when (profile.protocol) {
-            Protocol.VLESS -> {
-                base += "uuid" to profile.uuid
-                if (profile.flow.isNotBlank()) base += "flow" to profile.flow
-                base += "packet_encoding" to "xudp"
+        // Pre-resolve server domain to IP(s) via Android system DNS (matching v2rayNG resolveOutboundDomainsToHosts)
+        val serverHost = p.server.trim()
+        var resolvedStrategy: String? = null
+        var happyEyeballs: Map<String, Any?>? = null
+        if (serverHost.isNotBlank() && !isPureIpAddress(serverHost) && settings.outboundDomainResolve != "asis") {
+            val resolvedIps = resolveDomainToIps(serverHost, preferIpv6 = settings.preferIpv6)
+            if (resolvedIps.isNotEmpty()) {
+                dnsHosts[serverHost] = if (resolvedIps.size == 1) resolvedIps.first() else resolvedIps
+                resolvedStrategy = "UseIP"
+                happyEyeballs = Json.obj(
+                    "tryDelayMs" to 250,
+                    "interleave" to 2,
+                    "prioritizeIPv6" to settings.preferIpv6,
+                )
+            } else {
+                resolvedStrategy = if (settings.ipv6) "UseIP" else "UseIPv4"
             }
+        }
 
-            Protocol.VMESS -> {
-                base += "uuid" to profile.uuid
-                base += "alter_id" to profile.alterId
-                base += "security" to profile.security.ifBlank { "auto" }
-                base += "packet_encoding" to "xudp"
-            }
+        val protocolName = when (p.protocol) {
+            Protocol.VLESS -> "vless"
+            Protocol.VMESS -> "vmess"
+            Protocol.TROJAN -> "trojan"
+            Protocol.SHADOWSOCKS -> "shadowsocks"
+            Protocol.SOCKS -> "socks"
+            Protocol.HTTP -> "http"
+            Protocol.HYSTERIA2, Protocol.TUIC -> "hysteria"
+            Protocol.WIREGUARD -> "wireguard"
+            else -> "vless"
+        }
 
-            Protocol.TROJAN -> base += "password" to profile.password
+        val outSettings: Map<String, Any?> = when (p.protocol) {
+            Protocol.VLESS -> Json.obj(
+                "address" to serverHost,
+                "port" to p.serverPort,
+                "id" to p.uuid.trim(),
+                "encryption" to p.encryption.ifBlank { "none" },
+                "flow" to p.flow.takeIf { it.isNotBlank() },
+                "level" to 8,
+            )
 
-            Protocol.SHADOWSOCKS -> {
-                base += "method" to profile.method
-                base += "password" to profile.password
-                if (profile.plugin.isNotBlank()) {
-                    base += "plugin" to profile.plugin
-                    if (profile.pluginOptions.isNotBlank()) {
-                        base += "plugin_opts" to profile.pluginOptions
-                    }
-                }
-            }
+            Protocol.VMESS -> Json.obj(
+                "address" to serverHost,
+                "port" to p.serverPort,
+                "id" to p.uuid.trim(),
+                "security" to p.security.ifBlank { "auto" },
+                "level" to 8,
+            )
 
-            Protocol.SOCKS, Protocol.HTTP -> {
-                if (profile.username.isNotBlank()) base += "username" to profile.username
-                if (profile.password.isNotBlank()) base += "password" to profile.password
-            }
+            Protocol.TROJAN -> Json.obj(
+                "address" to serverHost,
+                "port" to p.serverPort,
+                "password" to p.password,
+                "flow" to p.flow.takeIf { it.isNotBlank() },
+                "level" to 8,
+            )
 
-            Protocol.HYSTERIA2 -> {
-                base += "password" to profile.password
-                if (profile.upMbps > 0) base += "up_mbps" to profile.upMbps
-                if (profile.downMbps > 0) base += "down_mbps" to profile.downMbps
-            }
+            Protocol.SHADOWSOCKS -> Json.obj(
+                "address" to serverHost,
+                "port" to p.serverPort,
+                "password" to p.password,
+                "method" to p.method.ifBlank { "chacha20-ietf-poly1305" },
+                "level" to 8,
+            )
 
-            Protocol.TUIC -> {
-                base += "uuid" to profile.uuid
-                if (profile.password.isNotBlank()) base += "password" to profile.password
-            }
+            Protocol.SOCKS, Protocol.HTTP -> Json.obj(
+                "address" to serverHost,
+                "port" to p.serverPort,
+                "user" to p.username.takeIf { it.isNotBlank() },
+                "pass" to p.password.takeIf { it.isNotBlank() },
+                "level" to 8,
+            )
+
+            Protocol.HYSTERIA2, Protocol.TUIC -> Json.obj(
+                "address" to serverHost,
+                "port" to p.serverPort,
+                "version" to 2,
+            )
 
             Protocol.WIREGUARD -> {
-                base += "private_key" to profile.privateKey
-                base += "peer_public_key" to profile.peerPublicKey
-                if (profile.preSharedKey.isNotBlank()) {
-                    base += "pre_shared_key" to profile.preSharedKey
-                }
-                if (profile.localAddresses.isNotEmpty()) {
-                    base += "local_address" to profile.localAddresses
-                }
-                if (profile.reserved.isNotEmpty()) base += "reserved" to profile.reserved
-                base += "mtu" to profile.mtu
+                val addrs = p.localAddresses.ifEmpty { listOf("172.16.0.2/32") }
+                    .let { list -> if (settings.ipv6) list else list.filter { !it.contains(":") }.ifEmpty { listOf("172.16.0.2/32") } }
+                val endpointHost = if (serverHost.contains(":") && !serverHost.startsWith("[")) "[$serverHost]" else serverHost
+                Json.obj(
+                    "secretKey" to p.privateKey,
+                    "address" to addrs,
+                    "peers" to listOf(
+                        Json.obj(
+                            "publicKey" to p.peerPublicKey,
+                            "preSharedKey" to p.preSharedKey.takeIf { it.isNotBlank() },
+                            "endpoint" to "$endpointHost:${p.serverPort}",
+                        ),
+                    ),
+                    "mtu" to if (p.mtu in 1280..1500) p.mtu else 1420,
+                    "reserved" to p.reserved.takeIf { it.isNotEmpty() },
+                )
             }
 
-            Protocol.SSH -> {
-                if (profile.username.isNotBlank()) base += "user" to profile.username
-                if (profile.password.isNotBlank()) base += "password" to profile.password
-                base += "client_version" to profile.clientVersion
-                if (profile.hostKeyAlgorithms.isNotEmpty()) {
-                    base += "host_key_algorithms" to profile.hostKeyAlgorithms
-                }
+            else -> emptyMap()
+        }
+
+        val streamSettings = if (p.protocol == Protocol.WIREGUARD) {
+            if (resolvedStrategy != null) {
+                Json.obj(
+                    "sockopt" to Json.obj(
+                        "domainStrategy" to resolvedStrategy,
+                        "happyEyeballs" to happyEyeballs,
+                    ),
+                )
+            } else {
+                null
             }
-
-            Protocol.NAIVE -> {
-                base += "username" to profile.username
-                base += "password" to profile.password
-            }
-
-            Protocol.CUSTOM, Protocol.DIRECT -> Unit
+        } else {
+            buildStreamSettings(p, settings, resolvedStrategy, happyEyeballs)
         }
 
-        if (profile.transport.type != "tcp" && profile.transport.type.isNotBlank()) {
-            base += "transport" to transportMap(profile)
+        // Mux configuration (matching v2rayNG CoreOutboundBuilder.updateOutboundWithGlobalSettings)
+        val allowMux = settings.tcpMux &&
+            p.protocol in setOf(Protocol.VLESS, Protocol.VMESS) &&
+            p.transport.type.lowercase() != "xhttp"
+        val muxObj = if (allowMux) {
+            val concurrency = if (p.protocol == Protocol.VLESS && p.flow.isNotBlank()) -1 else settings.muxConcurrency
+            Json.obj(
+                "enabled" to true,
+                "concurrency" to concurrency,
+                "xudpConcurrency" to settings.muxXudpConcurrency,
+                "xudpProxyUDP443" to settings.muxXudpQuic,
+            )
+        } else {
+            Json.obj(
+                "enabled" to false,
+                "concurrency" to -1,
+            )
         }
 
-        if (profile.tls.enabled) {
-            base += "tls" to tlsMap(profile)
-        }
-
-        return base.toMap()
+        return Json.obj(
+            "tag" to "proxy",
+            "protocol" to protocolName,
+            "settings" to outSettings,
+            "streamSettings" to streamSettings,
+            "mux" to muxObj,
+        )
     }
 
-    /**
-     * Builds the sing-box transport map.
-     * Matches NekoBoxForAndroid (`V2RayFmt.kt`): if `path` contains `?ed=2560`, splits `path`
-     * into clean `path`, `max_early_data = 2560`, and `early_data_header_name = "Sec-WebSocket-Protocol"`.
-     */
-    private fun transportMap(profile: Profile): Map<String, Any?> {
-        val t = profile.transport
-        val fields = mutableListOf<Pair<String, Any?>>("type" to t.type)
-        when (t.type) {
-            "ws", "httpupgrade" -> {
-                val (cleanPath, earlyData, earlyDataHeader) = ShareLinkParser.extractWsEarlyData(
-                    rawPath = t.path,
-                    explicitEd = t.maxEarlyData,
-                    explicitEh = t.earlyDataHeader,
-                )
-                if (cleanPath.isNotBlank()) fields += "path" to cleanPath
-                if (t.host.isNotBlank()) {
-                    fields += if (t.type == "httpupgrade") {
-                        "host" to t.host
-                    } else {
-                        "headers" to mapOf("Host" to t.host)
-                    }
-                }
-                if (t.type == "ws" && earlyData > 0) {
-                    fields += "max_early_data" to earlyData
-                    fields += "early_data_header_name" to earlyDataHeader.ifBlank { "Sec-WebSocket-Protocol" }
+    private fun buildStreamSettings(
+        p: Profile,
+        settings: AppSettings,
+        resolvedStrategy: String?,
+        happyEyeballs: Map<String, Any?>?,
+    ): Map<String, Any?> {
+        val stream = linkedMapOf<String, Any?>()
+        val rawNet = if (p.protocol == Protocol.HYSTERIA2 || p.protocol == Protocol.TUIC) {
+            "hysteria"
+        } else {
+            p.transport.type.ifBlank { "tcp" }.lowercase()
+        }
+
+        // Map deprecated h2/http transport in Xray v1.26+ to xhttp or ws if needed
+        val network = when (rawNet) {
+            "splithttp" -> "xhttp"
+            "http", "h2" -> "xhttp"
+            else -> rawNet
+        }
+        stream["network"] = network
+
+        var transportSni = ""
+        when (network) {
+            "tcp" -> {
+                if (p.transport.headerType.equals("http", ignoreCase = true)) {
+                    val hosts = p.transport.host.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    val paths = p.transport.path.split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("/") }
+                    transportSni = hosts.firstOrNull().orEmpty()
+                    stream["tcpSettings"] = Json.obj(
+                        "header" to Json.obj(
+                            "type" to "http",
+                            "request" to Json.obj(
+                                "version" to "1.1",
+                                "method" to "GET",
+                                "path" to paths,
+                                "headers" to Json.obj(
+                                    "Host" to hosts.takeIf { it.isNotEmpty() },
+                                    "User-Agent" to listOf("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36"),
+                                    "Accept-Encoding" to listOf("gzip, deflate"),
+                                    "Connection" to listOf("keep-alive"),
+                                    "Pragma" to "no-cache",
+                                ),
+                            ),
+                        ),
+                    )
+                } else {
+                    transportSni = p.transport.host
+                    stream["tcpSettings"] = Json.obj(
+                        "header" to Json.obj("type" to "none"),
+                    )
                 }
             }
 
-            "http" -> {
-                if (t.path.isNotBlank()) fields += "path" to t.path
-                if (t.host.isNotBlank()) fields += "host" to listOf(t.host)
+            "ws" -> {
+                // Exactly like v2rayNG CoreOutboundBuilder:
+                // wsSettings.host = host, wsSettings.path = path (preserving ?ed=2560!)
+                val wsHost = p.transport.host
+                val wsPath = ShareLinkParser.buildWsPathWithEd(p.transport)
+                transportSni = wsHost
+                stream["wsSettings"] = Json.obj(
+                    "host" to wsHost,
+                    "path" to wsPath,
+                    "headers" to p.transport.headers.takeIf { it.isNotEmpty() },
+                )
+            }
+
+            "httpupgrade" -> {
+                val huHost = p.transport.host
+                val huPath = ShareLinkParser.buildWsPathWithEd(p.transport)
+                transportSni = huHost
+                stream["httpupgradeSettings"] = Json.obj(
+                    "host" to huHost,
+                    "path" to huPath,
+                )
+            }
+
+            "xhttp" -> {
+                val xHost = p.transport.host
+                val xPath = p.transport.path.ifBlank { "/" }
+                transportSni = xHost
+                val extraParsed = if (p.transport.xhttpExtra.isNotBlank()) {
+                    runCatching { Json.parse(p.transport.xhttpExtra) }.getOrNull()
+                } else null
+                stream["xhttpSettings"] = Json.obj(
+                    "host" to xHost,
+                    "path" to xPath,
+                    "mode" to p.transport.xhttpMode.ifBlank { "auto" },
+                    "extra" to extraParsed,
+                )
             }
 
             "grpc" -> {
-                val svc = t.serviceName.substringBefore("?ed=")
-                if (svc.isNotBlank()) fields += "service_name" to svc
+                transportSni = p.transport.authority.ifBlank { p.transport.host }
+                stream["grpcSettings"] = Json.obj(
+                    "serviceName" to p.transport.serviceName.ifBlank { p.transport.path },
+                    "authority" to p.transport.authority.takeIf { it.isNotBlank() },
+                    "multiMode" to (p.transport.grpcMode == "multi"),
+                    "idle_timeout" to 60,
+                    "health_check_timeout" to 20,
+                )
+            }
+
+            "kcp" -> {
+                stream["kcpSettings"] = Json.obj(
+                    "mtu" to 1350,
+                    "tti" to 50,
+                    "uplinkCapacity" to 12,
+                    "downlinkCapacity" to 100,
+                    "congestion" to false,
+                    "readBufferSize" to 1,
+                    "writeBufferSize" to 1,
+                )
+            }
+
+            "hysteria" -> {
+                stream["hysteriaSettings"] = Json.obj(
+                    "version" to 2,
+                    "auth" to p.password,
+                )
+                val quicParams = linkedMapOf<String, Any?>()
+                if (p.upMbps > 0) quicParams["brutalUp"] = "${p.upMbps} mbps"
+                if (p.downMbps > 0) quicParams["brutalDown"] = "${p.downMbps} mbps"
+                if (quicParams.isNotEmpty()) quicParams["congestion"] = "brutal"
+                if (p.portHopping.isNotBlank()) {
+                    quicParams["udpHop"] = Json.obj(
+                        "ports" to p.portHopping,
+                        "interval" to p.portHoppingInterval.ifBlank { "30" },
+                    )
+                }
+                val finalMask = linkedMapOf<String, Any?>()
+                if (quicParams.isNotEmpty()) finalMask["quicParams"] = quicParams
+                if (p.obfsPassword.isNotBlank()) {
+                    finalMask["udp"] = listOf(
+                        Json.obj(
+                            "type" to "salamander",
+                            "settings" to Json.obj("password" to p.obfsPassword),
+                        ),
+                    )
+                }
+                if (finalMask.isNotEmpty()) {
+                    stream["finalmask"] = finalMask
+                }
             }
         }
-        return fields.toMap()
-    }
 
-    private fun tlsMap(profile: Profile): Map<String, Any?> {
-        val tls = profile.tls
-        val fields = mutableListOf<Pair<String, Any?>>("enabled" to true)
-        val serverName = tls.serverName.ifBlank {
-            profile.transport.host.ifBlank { profile.server }
-        }
-        if (serverName.isNotBlank()) fields += "server_name" to serverName
-        if (tls.insecure) fields += "insecure" to true
-        if (tls.alpn.isNotEmpty()) fields += "alpn" to tls.alpn
-        if (tls.minVersion.isNotBlank()) fields += "min_version" to tls.minVersion
-        if (tls.maxVersion.isNotBlank()) fields += "max_version" to tls.maxVersion
-
-        if (tls.reality) {
-            fields += "reality" to mapOf(
-                "enabled" to true,
-                "public_key" to tls.realityPublicKey,
-                "short_id" to tls.realityShortId,
+        // TLS / REALITY settings
+        val isReality = p.tls.reality
+        val isTls = p.tls.enabled || p.protocol == Protocol.HYSTERIA2 || p.protocol == Protocol.TUIC
+        if (isReality) {
+            stream["security"] = "reality"
+            val sni = p.tls.serverName.ifBlank { transportSni.ifBlank { p.server } }
+            stream["realitySettings"] = Json.obj(
+                "serverName" to sni,
+                "fingerprint" to p.tls.utlsFingerprint.ifBlank { "chrome" },
+                "publicKey" to p.tls.realityPublicKey,
+                "shortId" to p.tls.realityShortId,
+                "spiderX" to p.tls.realitySpiderX.ifBlank { "/" },
+            )
+        } else if (isTls) {
+            stream["security"] = "tls"
+            val sni = p.tls.serverName.ifBlank {
+                when {
+                    transportSni.isNotBlank() && !isPureIpAddress(transportSni) -> transportSni
+                    !isPureIpAddress(p.server) -> p.server
+                    else -> transportSni
+                }
+            }
+            val alpnList = if (p.protocol == Protocol.HYSTERIA2 || p.protocol == Protocol.TUIC) {
+                p.tls.alpn.ifEmpty { listOf("h3") }
+            } else {
+                p.tls.alpn.takeIf { it.isNotEmpty() }
+            }
+            stream["tlsSettings"] = Json.obj(
+                "allowInsecure" to (p.tls.insecure && p.tls.pinnedCA256.isBlank()),
+                "serverName" to sni.takeIf { it.isNotBlank() },
+                "fingerprint" to p.tls.utlsFingerprint.takeIf { it.isNotBlank() },
+                "alpn" to alpnList,
+                "echConfigList" to p.tls.echConfigList.takeIf { it.isNotBlank() },
+                "pinnedPeerCertSha256" to p.tls.pinnedCA256.takeIf { it.isNotBlank() },
             )
         }
-        if (tls.utls || tls.reality) {
-            fields += "utls" to mapOf(
-                "enabled" to true,
-                "fingerprint" to tls.utlsFingerprint.ifBlank { "chrome" },
+
+        // Xray TLS Fragment & UDP Noise (`finalmask`) when enabled in Settings
+        if (settings.fragmentEnabled && (isTls || isReality) && stream["finalmask"] == null) {
+            val packets = if (isReality && settings.fragmentPackets == "tlshello") {
+                "1-3"
+            } else {
+                settings.fragmentPackets.ifBlank { "tlshello" }
+            }
+            stream["finalmask"] = Json.obj(
+                "tcp" to listOf(
+                    Json.obj(
+                        "type" to "fragment",
+                        "settings" to Json.obj(
+                            "packets" to packets,
+                            "length" to settings.fragmentLength.ifBlank { "50-100" },
+                            "delay" to settings.fragmentInterval.ifBlank { "10-20" },
+                            "maxSplit" to settings.fragmentMaxSplit.ifBlank { "10" },
+                        ),
+                    ),
+                ),
+                "udp" to listOf(
+                    Json.obj(
+                        "type" to "noise",
+                        "settings" to Json.obj(
+                            "noise" to listOf(
+                                Json.obj(
+                                    "rand" to "10-20",
+                                    "delay" to "10-16",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
             )
         }
-        return fields.toMap()
+
+        // Sockopt (Happy Eyeballs + UseIP or TFO)
+        val sockopt = linkedMapOf<String, Any?>()
+        if (resolvedStrategy != null) {
+            sockopt["domainStrategy"] = resolvedStrategy
+        }
+        if (happyEyeballs != null) {
+            sockopt["happyEyeballs"] = happyEyeballs
+        }
+        if (settings.tcpFastOpen) {
+            sockopt["tcpFastOpen"] = true
+        }
+        if (sockopt.isNotEmpty()) {
+            stream["sockopt"] = sockopt
+        }
+
+        return stream
     }
+
+    // -------------------------------------------------------- Custom JSON
+
+    @Suppress("UNCHECKED_CAST")
+    private fun buildCustomConfig(
+        profile: Profile,
+        settings: AppSettings,
+        forSpeedtest: Boolean,
+    ): String {
+        val raw = profile.customConfig.trim()
+        val parsed = runCatching { Json.miniMap(raw) }.getOrNull() ?: return raw
+
+        // If it's already a full Xray config (has `outbounds` with `protocol`)
+        val outbounds = parsed["outbounds"] as? List<Map<String, Any?>>
+        if (outbounds != null && outbounds.any { it.containsKey("protocol") }) {
+            val mutable = LinkedHashMap(parsed)
+            if (forSpeedtest) {
+                mutable.remove("inbounds")
+            } else {
+                mutable["inbounds"] = buildInbounds(settings)
+                mutable["stats"] = emptyMap<String, Any?>()
+                mutable["policy"] = Json.obj(
+                    "levels" to Json.obj(
+                        "8" to Json.obj(
+                            "handshake" to 4,
+                            "connIdle" to 300,
+                            "uplinkOnly" to 1,
+                            "downlinkOnly" to 1,
+                        ),
+                    ),
+                    "system" to Json.obj(
+                        "statsOutboundUplink" to true,
+                        "statsOutboundDownlink" to true,
+                    ),
+                )
+            }
+            return Json.any(mutable)
+        }
+
+        // Single Xray outbound object `{ "protocol": "vless", ... }`
+        if (parsed.containsKey("protocol") && parsed.containsKey("settings")) {
+            val outboundMap = LinkedHashMap(parsed)
+            outboundMap["tag"] = "proxy"
+            val root = linkedMapOf<String, Any?>(
+                "log" to Json.obj("loglevel" to settings.logLevel),
+                "dns" to buildDns(settings, emptyMap()),
+                "outbounds" to listOf(
+                    outboundMap,
+                    Json.obj("tag" to "direct", "protocol" to "freedom"),
+                    Json.obj("tag" to "block", "protocol" to "blackhole"),
+                    Json.obj("tag" to "dns-out", "protocol" to "dns"),
+                ),
+                "routing" to buildRouting(settings, forSpeedtest),
+            )
+            if (!forSpeedtest) {
+                root["inbounds"] = buildInbounds(settings)
+            }
+            return Json.any(root)
+        }
+
+        return raw
+    }
+
+    // --------------------------------------------------- DNS Resolution Helper
+
+    private fun isPureIpAddress(value: String): Boolean {
+        val v = value.trim().removeSurrounding("[", "]")
+        if (v.isEmpty()) return false
+        val ipv4Regex = Regex("^\\d{1,3}(\\.\\d{1,3}){3}$")
+        if (ipv4Regex.matches(v)) return true
+        if (v.contains(":")) return true
+        return false
+    }
+
+    private fun resolveDomainToIps(domain: String, preferIpv6: Boolean): List<String> {
+        return try {
+            val addresses = InetAddress.getAllByName(domain)
+            val sorted = addresses.sortedWith(
+                compareBy { addr ->
+                    when {
+                        preferIpv6 && addr is Inet6Address -> 0
+                        !preferIpv6 && addr is Inet4Address -> 0
+                        else -> 1
+                    }
+                },
+            )
+            val ips = sorted.mapNotNull { it.hostAddress }.distinct()
+            AppLogger.d("DNS", "Resolved $domain -> $ips")
+            ips
+        } catch (e: Exception) {
+            AppLogger.w("DNS", "System DNS could not pre-resolve $domain: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /** Basic sanity check before handing the config to Xray-core. */
+    fun validate(config: String): String? = runCatching {
+        val map = Json.miniMap(config)
+        val outbounds = map["outbounds"] as? List<*>
+        if (outbounds.isNullOrEmpty()) return "no outbounds block"
+        null
+    }.getOrElse { it.message ?: "invalid JSON" }
 }

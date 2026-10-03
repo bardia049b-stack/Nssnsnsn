@@ -2,13 +2,17 @@ package app.nebulabox.service
 
 import android.app.Notification
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.PowerManager
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import app.nebulabox.Application
 import app.nebulabox.MainActivity
@@ -23,6 +27,8 @@ import app.nebulabox.engine.TunProvider
 import app.nebulabox.engine.TunnelState
 import app.nebulabox.engine.TunnelStatus
 import app.nebulabox.util.AppLogger
+import app.nebulabox.util.Formatters
+import com.v2ray.ang.service.TProxyService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,14 +39,12 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Owns the Android VPN session and hands the resulting tun descriptor to the
- * tunnel engine.
- *
- * Teardown follows SagerNet/sing-box-for-android (`BoxService.stopService`) and
- * v2rayNG (`CoreVpnService`):
- *  - Never blocks the Main UI thread on disconnect
- *  - Closes the TUN `ParcelFileDescriptor` FIRST on `Dispatchers.IO` so sing-box's
- *    TUN read loop unblocks immediately, then closes `CommandServer`.
+ * Android [VpnService] aligned with `v2rayNG 2.3.10`'s `CoreVpnService` & `CoreServiceManager`:
+ *  - Supports both `hev-socks5-tunnel` (`TProxyService` + Xray SOCKS5/HTTP inbound)
+ *    and Xray-core Native TUN (`"protocol": "tun"` / gVisor)
+ *  - Tracks upstream physical network via [ConnectivityManager.NetworkCallback] and updates
+ *    [setUnderlyingNetworks] so cellular/Wi-Fi handovers work seamlessly
+ *  - Performs non-blocking teardown on [Dispatchers.IO]
  */
 class TunnelVpnService : VpnService(), TunProvider {
 
@@ -49,10 +53,11 @@ class TunnelVpnService : VpnService(), TunProvider {
     private lateinit var settingsStore: SettingsStore
     @Volatile private var interfaceFd: ParcelFileDescriptor? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    private var logJob: Job? = null
+    private var statsNotificationJob: Job? = null
     private var connectJob: Job? = null
     private var activeProfileName = ""
     private val isStopping = AtomicBoolean(false)
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -60,7 +65,7 @@ class TunnelVpnService : VpnService(), TunProvider {
         Engines.tunProvider = this
         profileStore = ProfileStore(this)
         settingsStore = SettingsStore(this)
-        AppLogger.i(TAG, "TunnelVpnService.onCreate")
+        AppLogger.i(TAG, "TunnelVpnService.onCreate (hevTunLoaded=${TProxyService.isLoaded})")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -76,14 +81,21 @@ class TunnelVpnService : VpnService(), TunProvider {
                 requestStopTunnel()
             }
         }
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
 
     private suspend fun connect(profileId: String?) {
         AppLogger.i(TAG, "connect requested (profileId=$profileId)")
-        val settings: AppSettings = settingsStore.current().normalized()
+        val rawSettings: AppSettings = settingsStore.current().normalized()
+        // If hev-socks5-tunnel is requested but native lib isn't loaded, fall back to Xray Native TUN
+        val settings = if (rawSettings.useHevTun && !TProxyService.isLoaded) {
+            rawSettings.copy(useHevTun = false)
+        } else {
+            rawSettings
+        }
+
         val known = profileStore.all()
         val profile: Profile? = if (profileId != null) {
             known.firstOrNull { it.id == profileId }
@@ -120,25 +132,35 @@ class TunnelVpnService : VpnService(), TunProvider {
         val safeMtu = if (settings.mtu in 1280..1500) settings.mtu else 1500
         val engine = Engines.obtain()
         try {
+            // Stop any previous hev-socks5-tunnel session before starting
+            TProxyService.stop()
+
             engine.start(activeProfileName, config, safeMtu) { openTun(settings) }
+
+            // If using hev-socks5-tunnel mode, start TProxyService on the established TUN fd
+            val pfd = interfaceFd
+            if (settings.useHevTun && pfd != null) {
+                val startedHev = TProxyService.start(this, pfd, settings)
+                if (!startedHev) {
+                    throw IllegalStateException("hev-socks5-tunnel failed to start")
+                }
+            }
+
+            registerNetworkMonitor()
+            acquireWakeLock()
+
             withContext(Dispatchers.Main) {
                 showNotification(getString(R.string.status_started) + " · " + activeProfileName)
             }
-            logJob?.cancel()
-            logJob = scope.launch {
-                engine.logs.collect { line ->
-                    Log.println(priorityOf(line.level), "NebulaBox", line.message)
-                    val lvl = when (line.level) {
-                        5, 6, 7 -> AppLogger.Level.ERROR
-                        4 -> AppLogger.Level.WARN
-                        2 -> AppLogger.Level.DEBUG
-                        else -> AppLogger.Level.INFO
-                    }
-                    AppLogger.log(lvl, "sing-box", line.message)
-                }
+
+            if (settings.showSpeedInNotification) {
+                startSpeedNotificationJob(engine)
             }
-            acquireWakeLock()
-            AppLogger.i(TAG, "Tunnel connected: $activeProfileName")
+
+            AppLogger.i(
+                TAG,
+                "Tunnel connected: $activeProfileName (mode=${if (settings.useHevTun) "hev-socks5-tunnel" else "xray-tun"})",
+            )
         } catch (e: Throwable) {
             AppLogger.e(TAG, "Tunnel start failed: ${e.message}", e)
             stopWithMessage(e.message ?: getString(R.string.error_start))
@@ -146,8 +168,7 @@ class TunnelVpnService : VpnService(), TunProvider {
     }
 
     /**
-     * Builds the Android VPN session. Returns true once a tun descriptor exists
-     * for the engine to duplicate via [tunFileDescriptor].
+     * Builds the Android VPN session matching `v2rayNG 2.3.10`'s `CoreVpnService.configureVpnService`.
      */
     private fun openTun(settings: AppSettings): Boolean {
         if (prepare(this) != null) {
@@ -160,33 +181,56 @@ class TunnelVpnService : VpnService(), TunProvider {
             .setSession(activeProfileName.ifBlank { getString(R.string.app_name) })
             .setMtu(safeMtu)
             .setBlocking(false)
+            .addAddress("10.10.14.1", 30)
 
-        if (settings.routeMode != "direct") {
-            builder.addAddress("172.19.0.1", 30)
-            builder.addRoute("0.0.0.0", 0)
-            builder.addDnsServer("172.19.0.2")
+        if (settings.bypassLan) {
+            ROUTED_IP_LIST.forEach { cidr ->
+                val parts = cidr.split('/')
+                if (parts.size == 2) {
+                    builder.addRoute(parts[0], parts[1].toInt())
+                }
+            }
         } else {
-            builder.addAddress("172.19.0.1", 30)
+            builder.addRoute("0.0.0.0", 0)
         }
+
         if (settings.ipv6) {
-            builder.addAddress("fdfe:dcba:9876::1", 126)
-            builder.addRoute("::", 0)
-            builder.addDnsServer("fdfe:dcba:9876::2")
+            builder.addAddress("fc00::10:10:14:1", 126)
+            if (settings.bypassLan) {
+                builder.addRoute("2000::", 3)
+            } else {
+                builder.addRoute("::", 0)
+            }
+        }
+
+        // Configure VPN DNS servers (matching v2rayNG SettingsManager.getVpnDnsServers)
+        val dnsList = settings.vpnDns.split(",")
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .ifEmpty { listOf("1.1.1.1") }
+        for (dns in dnsList) {
+            runCatching { builder.addDnsServer(dns) }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            builder.setMetered(false)
+            builder.setMetered(settings.meteredNetwork)
         }
 
-        // Route our own traffic outside the tunnel so outbound sockets cannot loop.
+        // Route our own app outside the TUN so Xray's outbound sockets never loop into tun0
         runCatching { builder.addDisallowedApplication(packageName) }
 
-        if (settings.perAppEnabled) {
+        if (settings.perAppEnabled && settings.perAppPackages.isNotEmpty()) {
             runCatching {
-                for (pkg in settings.perAppPackages) {
-                    if (pkg == packageName) continue
-                    if (settings.perAppMode == "include") builder.addAllowedApplication(pkg)
-                    else builder.addDisallowedApplication(pkg)
+                if (settings.perAppMode == "include") {
+                    for (pkg in settings.perAppPackages) {
+                        if (pkg == packageName) continue
+                        runCatching { builder.addAllowedApplication(pkg) }
+                    }
+                } else {
+                    for (pkg in settings.perAppPackages) {
+                        if (pkg == packageName) continue
+                        runCatching { builder.addDisallowedApplication(pkg) }
+                    }
                 }
             }
         }
@@ -208,19 +252,60 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
     }
 
-    /**
-     * Returns the raw file descriptor for the TUN interface.
-     * Note: sing-box `libbox` duplicates (`dup(fd)`) this descriptor internally,
-     * so we keep [interfaceFd] open until [requestStopTunnel] is called.
-     */
+    private fun registerNetworkMonitor() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
+        unregisterNetworkMonitor()
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        val req = NetworkRequest.Builder()
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
+            .build()
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                runCatching { setUnderlyingNetworks(arrayOf(network)) }
+            }
+
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                runCatching { setUnderlyingNetworks(arrayOf(network)) }
+            }
+
+            override fun onLost(network: Network) {
+                runCatching { setUnderlyingNetworks(null) }
+            }
+        }
+        runCatching {
+            cm.requestNetwork(req, cb)
+            networkCallback = cb
+        }.onFailure { e ->
+            AppLogger.w(TAG, "Failed to register network callback: ${e.message}")
+        }
+    }
+
+    private fun unregisterNetworkMonitor() {
+        val cb = networkCallback ?: return
+        networkCallback = null
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        runCatching { cm.unregisterNetworkCallback(cb) }
+    }
+
+    private fun startSpeedNotificationJob(engine: app.nebulabox.engine.TunnelEngine) {
+        statsNotificationJob?.cancel()
+        statsNotificationJob = scope.launch {
+            engine.status.collect { st ->
+                if (st.state == TunnelState.STARTED) {
+                    val speedText = "$activeProfileName · ↑ ${Formatters.speed(st.uplink)} ↓ ${Formatters.speed(st.downlink)}"
+                    withContext(Dispatchers.Main) {
+                        runCatching { showNotification(speedText) }
+                    }
+                }
+            }
+        }
+    }
+
     override fun tunFileDescriptor(): Int = interfaceFd?.fd ?: -1
 
     override fun protectSocket(fd: Int): Boolean = protect(fd)
 
-    /**
-     * Asynchronously stops the VPN tunnel off the main thread so the UI never freezes or ANRs.
-     * Closes `interfaceFd` FIRST so sing-box's TUN reader wakes up immediately.
-     */
     private fun requestStopTunnel() {
         if (!isStopping.compareAndSet(false, true)) {
             return
@@ -228,8 +313,9 @@ class TunnelVpnService : VpnService(), TunProvider {
         AppLogger.i(TAG, "requestStopTunnel: transitioning to STOPPING")
         connectJob?.cancel()
         connectJob = null
-        logJob?.cancel()
-        logJob = null
+        statsNotificationJob?.cancel()
+        statsNotificationJob = null
+        unregisterNetworkMonitor()
 
         val engine = Engines.active.value
         if (engine != null) {
@@ -237,15 +323,18 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
 
         scope.launch(Dispatchers.IO) {
-            // 1. Close TUN ParcelFileDescriptor FIRST (just like BoxService.stopService)
+            // 1. Stop hev-socks5-tunnel first if running (matching v2rayNG CoreVpnService.stopV2Ray)
+            runCatching { TProxyService.stop() }
+
+            // 2. Stop Xray-core loop
+            runCatching { engine?.stop() }
+
+            // 3. Close TUN ParcelFileDescriptor
             val pfd = interfaceFd
             interfaceFd = null
             runCatching { pfd?.close() }
 
-            // 2. Stop LibboxEngine on IO thread
-            runCatching { engine?.stop() }
-
-            // 3. Release WakeLock & stop service on Main thread
+            // 4. Release WakeLock & stop service on Main thread
             releaseWakeLock()
             isServiceAlive = false
             withContext(Dispatchers.Main) {
@@ -260,10 +349,12 @@ class TunnelVpnService : VpnService(), TunProvider {
 
     private fun stopWithMessage(message: String) {
         AppLogger.e(TAG, "tunnel stopped with error: $message")
+        unregisterNetworkMonitor()
+        runCatching { TProxyService.stop() }
+        runCatching { Engines.active.value?.stop() }
         val pfd = interfaceFd
         interfaceFd = null
         runCatching { pfd?.close() }
-        runCatching { Engines.active.value?.stop() }
 
         val engine = Engines.active.value
         if (engine != null) {
@@ -291,19 +382,19 @@ class TunnelVpnService : VpnService(), TunProvider {
 
     override fun onDestroy() {
         isServiceAlive = false
+        unregisterNetworkMonitor()
         if (Engines.tunProvider === this) Engines.tunProvider = null
-        val pfd = interfaceFd
-        interfaceFd = null
-        runCatching { pfd?.close() }
-        releaseWakeLock()
         if (!isStopping.get()) {
+            val pfd = interfaceFd
+            interfaceFd = null
             val engine = Engines.active.value
-            if (engine != null && engine.status.value.state != TunnelState.STOPPED) {
-                Thread {
-                    runCatching { engine.stop() }
-                }.start()
-            }
+            Thread {
+                runCatching { TProxyService.stop() }
+                runCatching { engine?.stop() }
+                runCatching { pfd?.close() }
+            }.start()
         }
+        releaseWakeLock()
         scope.cancel()
         super.onDestroy()
     }
@@ -351,15 +442,6 @@ class TunnelVpnService : VpnService(), TunProvider {
         startForeground(NOTIFICATION_ID, notification)
     }
 
-    private fun priorityOf(level: Int): Int = when (level) {
-        0, 1 -> Log.VERBOSE
-        2 -> Log.DEBUG
-        3 -> Log.INFO
-        4 -> Log.WARN
-        5 -> Log.ERROR
-        else -> Log.ASSERT
-    }
-
     companion object {
         private const val TAG = "NebulaBox"
         private const val NOTIFICATION_ID = 1
@@ -367,5 +449,40 @@ class TunnelVpnService : VpnService(), TunProvider {
         @Volatile
         var isServiceAlive: Boolean = false
             private set
+
+        // v2rayNG AppConfig.ROUTED_IP_LIST for bypassLan
+        private val ROUTED_IP_LIST = arrayOf(
+            "0.0.0.0/5",
+            "8.0.0.0/7",
+            "11.0.0.0/8",
+            "12.0.0.0/6",
+            "16.0.0.0/4",
+            "32.0.0.0/3",
+            "64.0.0.0/2",
+            "128.0.0.0/3",
+            "160.0.0.0/5",
+            "168.0.0.0/6",
+            "172.0.0.0/12",
+            "172.32.0.0/11",
+            "172.64.0.0/10",
+            "172.128.0.0/9",
+            "173.0.0.0/8",
+            "174.0.0.0/7",
+            "176.0.0.0/4",
+            "192.0.0.0/9",
+            "192.128.0.0/11",
+            "192.160.0.0/13",
+            "192.169.0.0/16",
+            "192.170.0.0/15",
+            "192.172.0.0/14",
+            "192.176.0.0/12",
+            "192.192.0.0/10",
+            "193.0.0.0/8",
+            "194.0.0.0/7",
+            "196.0.0.0/6",
+            "200.0.0.0/5",
+            "208.0.0.0/4",
+            "240.0.0.0/4",
+        )
     }
 }

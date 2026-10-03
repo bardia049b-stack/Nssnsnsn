@@ -5,13 +5,10 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
-// The sing-box native engine (libbox.aar) is produced separately by
-// scripts/build-libbox.sh because it needs a Go + NDK toolchain.
-// When it is present the real tunnel implementation is compiled in;
-// when it is absent the app still builds and runs with an inert engine
-// so the UI can be developed and shipped independently.
-val libboxAar = file("libs/libbox.aar")
-val hasEngine: Boolean = libboxAar.exists()
+// The Xray-core native engine (libv2ray.aar from 2dust/AndroidLibXrayLite v26.9.30)
+// is placed in app/libs/libv2ray.aar during the build.
+val libv2rayAar = file("libs/libv2ray.aar")
+val hasEngine: Boolean = libv2rayAar.exists()
 
 android {
     namespace = "app.nebulabox"
@@ -21,11 +18,11 @@ android {
         applicationId = "app.nebulabox"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "2.0.0-xray"
         resourceConfigurations += listOf("en", "fa")
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            abiFilters += listOf("arm64-v8a")
         }
         buildConfigField("boolean", "HAS_ENGINE", "$hasEngine")
     }
@@ -95,7 +92,7 @@ android {
 
 dependencies {
     if (hasEngine) {
-        implementation(files("libs/libbox.aar"))
+        implementation(files("libs/libv2ray.aar"))
     }
 
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))

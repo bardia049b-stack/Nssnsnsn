@@ -1,759 +1,335 @@
 package app.nebulabox.engine
 
-import android.annotation.SuppressLint
+import android.content.Context
 import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
-import android.net.NetworkRequest
-import android.net.TrafficStats
 import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
-import android.os.Process
-import android.provider.Settings
-import android.system.OsConstants
-import app.nebulabox.BuildConfig
+import android.os.SystemClock
+import androidx.annotation.RequiresApi
+import app.nebulabox.Application
 import app.nebulabox.util.AppLogger
-import io.nekohasekai.libbox.BridgeOptions
-import io.nekohasekai.libbox.BridgeSession
-import io.nekohasekai.libbox.CommandClient
-import io.nekohasekai.libbox.CommandClientHandler
-import io.nekohasekai.libbox.CommandClientOptions
-import io.nekohasekai.libbox.CommandServer
-import io.nekohasekai.libbox.CommandServerHandler
-import io.nekohasekai.libbox.ConnectionEvents
-import io.nekohasekai.libbox.ConnectionOwner
-import io.nekohasekai.libbox.InterfaceUpdateListener
-import io.nekohasekai.libbox.Libbox
-import io.nekohasekai.libbox.LocalDNSTransport
-import io.nekohasekai.libbox.LogIterator
-import io.nekohasekai.libbox.NeighborUpdateListener
-import io.nekohasekai.libbox.NetworkInterfaceIterator
-import io.nekohasekai.libbox.Notification
-import io.nekohasekai.libbox.OutboundGroupItemIterator
-import io.nekohasekai.libbox.OverrideOptions
-import io.nekohasekai.libbox.PlatformInterface
-import io.nekohasekai.libbox.PlatformUser
-import io.nekohasekai.libbox.SetupOptions
-import io.nekohasekai.libbox.ShellSession
-import io.nekohasekai.libbox.StringIterator
-import io.nekohasekai.libbox.SystemProxyStatus
-import io.nekohasekai.libbox.TunOptions
-import io.nekohasekai.libbox.WIFIState
+import go.Seq
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import java.net.Inet4Address
-import java.net.Inet6Address
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import libv2ray.CoreCallbackHandler
+import libv2ray.CoreController
+import libv2ray.Libv2ray
+import libv2ray.ProcessFinder
+import java.io.File
+import java.io.FileOutputStream
 import java.net.InetSocketAddress
-import java.net.InterfaceAddress
-import java.net.NetworkInterface
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Drives the sing-box native core (`libbox.aar` v1.14.2).
+ * Real [TunnelEngine] backed by `2dust/AndroidLibXrayLite` (`libv2ray.aar` v26.9.30 / Xray-core v1.260327.1),
+ * matching `v2rayNG 2.3.10`'s `CoreNativeManager` & `CoreServiceManager`.
  */
 class LibboxEngine : TunnelEngine {
 
     override val status = MutableStateFlow(TunnelStatus())
     override val groups = MutableStateFlow<List<OutboundGroup>>(emptyList())
 
-    private val logFlow = MutableSharedFlow<TunnelEngine.LogLine>(extraBufferCapacity = 256)
-    override val logs: Flow<TunnelEngine.LogLine> = logFlow
+    private val logFlow = MutableSharedFlow<TunnelEngine.LogLine>(
+        replay = 200,
+        extraBufferCapacity = 500,
+    )
+    override val logs: Flow<TunnelEngine.LogLine> = logFlow.asSharedFlow()
 
     override val implementationName: String
-        get() = "sing-box ${runCatching { Libbox.version() }.getOrDefault("unknown")}"
+        get() = runCatching {
+            ensureInit()
+            "Xray-core ${Libv2ray.checkVersionX()}"
+        }.getOrDefault("Xray-core (libv2ray)")
 
-    override val functional: Boolean get() = true
+    override val functional: Boolean = true
 
-    private var commandServer: CommandServer? = null
-    private var commandClient: CommandClient? = null
-    private var platform: Platform? = null
-    private var openTunCallback: (() -> Boolean)? = null
-    private var setupDone: Boolean = false
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var statsJob: Job? = null
+    private val initialized = AtomicBoolean(false)
 
-    private val uidPackageCache = ConcurrentHashMap<Int, List<String>>()
+    private val callbackHandler = object : CoreCallbackHandler {
+        override fun startup(): Long {
+            emitLog(3, "Xray-core callback: startup")
+            return 0L
+        }
 
-    @Volatile private var baseUidTxBytes: Long = 0L
-    @Volatile private var baseUidRxBytes: Long = 0L
-    @Volatile private var lastUidTxBytes: Long = 0L
-    @Volatile private var lastUidRxBytes: Long = 0L
-    @Volatile private var lastTrafficSampleMs: Long = 0L
+        override fun shutdown(): Long {
+            emitLog(3, "Xray-core callback: shutdown")
+            return 0L
+        }
 
-    private val monitorThread by lazy {
-        HandlerThread("NebulaNetworkMonitor").apply { start() }
-    }
-    private val monitorHandler by lazy {
-        Handler(monitorThread.looper)
-    }
-
-    private fun resetTrafficCounters() {
-        val myUid = Process.myUid()
-        val tx = TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0L)
-        val rx = TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0L)
-        baseUidTxBytes = tx
-        baseUidRxBytes = rx
-        lastUidTxBytes = tx
-        lastUidRxBytes = rx
-        lastTrafficSampleMs = System.currentTimeMillis()
-    }
-
-    private fun ensureSetup() {
-        if (setupDone) return
-        runCatching {
-            val app = app.nebulabox.Application.instance
-            val baseDir = app.filesDir.apply { mkdirs() }
-            val workingDir = (app.getExternalFilesDir(null) ?: baseDir).apply { mkdirs() }
-            val tempDir = app.cacheDir.apply { mkdirs() }
-            val options = SetupOptions().apply {
-                basePath = baseDir.absolutePath
-                workingPath = workingDir.absolutePath
-                tempPath = tempDir.absolutePath
-                // Workaround for Go runtime stack crash on Android 9+ (golang/go#68760)
-                fixAndroidStack = true
-                logMaxLines = 3000
-                debug = BuildConfig.DEBUG
-                crashReportSource = "NebulaBox"
-                appVersion = BuildConfig.VERSION_CODE.toString()
-                appMarketingVersion = BuildConfig.VERSION_NAME
+        override fun onEmitStatus(code: Long, statusMsg: String?): Long {
+            if (!statusMsg.isNullOrBlank()) {
+                emitLog(3, "Xray status [$code]: $statusMsg")
             }
-            Libbox.setup(options)
+            return 0L
+        }
+    }
+
+    private val coreController: CoreController by lazy {
+        ensureInit()
+        Libv2ray.newCoreController(callbackHandler)
+    }
+
+    private fun ensureInit() {
+        if (!initialized.compareAndSet(false, true)) return
+        val app = Application.instance
+        val assetDir = File(app.filesDir, "assets").apply { mkdirs() }
+        copyGeoAssetsIfNeeded(app, assetDir)
+        Seq.setContext(app.applicationContext)
+        Libv2ray.initCoreEnv(assetDir.absolutePath, "")
+        AppLogger.i(TAG, "Libv2ray initialized: version=${runCatching { Libv2ray.checkVersionX() }.getOrNull()}, assets=${assetDir.absolutePath}")
+    }
+
+    private fun copyGeoAssetsIfNeeded(context: Context, targetDir: File) {
+        val geoFiles = arrayOf("geosite.dat", "geoip.dat", "geoip-only-cn-private.dat")
+        for (name in geoFiles) {
+            val outFile = File(targetDir, name)
+            if (outFile.exists() && outFile.length() > 1024L) continue
             runCatching {
-                Libbox.setLocale(java.util.Locale.getDefault().toLanguageTag())
-            }
-            setupDone = true
-            AppLogger.i(TAG, "Libbox.setup ok: version=${runCatching { Libbox.version() }.getOrDefault("?")}, base=${baseDir.absolutePath}")
-        }.onFailure {
-            AppLogger.e(TAG, "Libbox.setup failed", it)
-        }
-    }
-
-    private val serverHandler = object : CommandServerHandler {
-        override fun serviceStop() {
-            AppLogger.i(TAG, "CommandServerHandler.serviceStop called")
-            status.value = status.value.copy(state = TunnelState.STOPPED)
-        }
-
-        override fun serviceReload() {
-            AppLogger.i(TAG, "CommandServerHandler.serviceReload called")
-        }
-
-        // IMPORTANT: Must NEVER return null; command_server.go dereferences status.Enabled directly!
-        override fun getSystemProxyStatus(): SystemProxyStatus {
-            return SystemProxyStatus().apply {
-                available = false
-                enabled = false
-            }
-        }
-
-        override fun setSystemProxyEnabled(enabled: Boolean) = Unit
-
-        override fun writeDebugMessage(message: String?) {
-            if (!message.isNullOrBlank()) {
-                AppLogger.d("sing-box", stripAnsi(message))
-            }
-        }
-
-        override fun triggerNativeCrash() = Unit
-
-        override fun connectSSHAgent(): Int = -1
-    }
-
-    private val clientHandler = object : CommandClientHandler {
-        override fun connected() {
-            AppLogger.i(TAG, "CommandClient connected to CommandServer")
-            val current = status.value
-            if (current.state != TunnelState.STOPPING && current.state != TunnelState.STOPPED) {
-                status.value = current.copy(state = TunnelState.STARTED)
-            }
-        }
-
-        override fun disconnected(message: String?) {
-            if (!message.isNullOrBlank()) {
-                AppLogger.w(TAG, "CommandClient disconnected: $message")
-            }
-        }
-
-        override fun clearLogs() = Unit
-
-        override fun initializeClashMode(modeList: StringIterator?, currentMode: String?) = Unit
-
-        override fun updateClashMode(newMode: String?) = Unit
-
-        override fun setDefaultLogLevel(level: Int) = Unit
-
-        override fun writeStatus(message: io.nekohasekai.libbox.StatusMessage?) {
-            message ?: return
-            val current = status.value
-            if (current.state == TunnelState.STOPPING || current.state == TunnelState.STOPPED) return
-
-            val myUid = Process.myUid()
-            val nowMs = System.currentTimeMillis()
-            val curTx = TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0L)
-            val curRx = TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0L)
-            val dtMs = (nowMs - lastTrafficSampleMs).coerceAtLeast(500L)
-            val uidTxRate = ((curTx - lastUidTxBytes).coerceAtLeast(0L) * 1000L) / dtMs
-            val uidRxRate = ((curRx - lastUidRxBytes).coerceAtLeast(0L) * 1000L) / dtMs
-            val uidTxTotal = (curTx - baseUidTxBytes).coerceAtLeast(0L)
-            val uidRxTotal = (curRx - baseUidRxBytes).coerceAtLeast(0L)
-            lastUidTxBytes = curTx
-            lastUidRxBytes = curRx
-            lastTrafficSampleMs = nowMs
-
-            val upRate = if (message.uplink > 0L) message.uplink else uidTxRate
-            val downRate = if (message.downlink > 0L) message.downlink else uidRxRate
-            val upTotal = if (message.uplinkTotal > 0L) message.uplinkTotal else uidTxTotal
-            val downTotal = if (message.downlinkTotal > 0L) message.downlinkTotal else uidRxTotal
-
-            status.value = current.copy(
-                uplink = upRate,
-                downlink = downRate,
-                uplinkTotal = upTotal,
-                downlinkTotal = downTotal,
-                memory = message.memory,
-                connectionsIn = message.connectionsIn,
-                connectionsOut = message.connectionsOut,
-            )
-        }
-
-        override fun writeGroups(groupIterator: io.nekohasekai.libbox.OutboundGroupIterator?) {
-            groupIterator ?: return
-            val parsed = mutableListOf<OutboundGroup>()
-            while (groupIterator.hasNext()) {
-                val group = groupIterator.next()
-                val items = mutableListOf<GroupItem>()
-                val itemIterator = group.items
-                while (itemIterator.hasNext()) {
-                    val item = itemIterator.next()
-                    items += GroupItem(
-                        tag = item.tag,
-                        type = item.type,
-                        delayMs = item.urlTestDelay,
-                    )
+                context.assets.open(name).use { input ->
+                    FileOutputStream(outFile).use { output ->
+                        input.copyTo(output)
+                    }
                 }
-                parsed += OutboundGroup(
-                    tag = group.tag,
-                    type = group.type,
-                    selected = group.selected,
-                    selectable = group.selectable,
-                    items = items,
-                )
-            }
-            groups.value = parsed
-        }
-
-        override fun writeOutbounds(items: OutboundGroupItemIterator?) = Unit
-
-        override fun writeLogs(logIterator: LogIterator?) {
-            logIterator ?: return
-            while (logIterator.hasNext()) {
-                val entry = logIterator.next() ?: continue
-                val cleanMsg = stripAnsi(entry.message ?: "")
-                if (cleanMsg.isBlank()) continue
-                logFlow.tryEmit(
-                    TunnelEngine.LogLine(
-                        level = entry.level,
-                        time = System.currentTimeMillis(),
-                        message = cleanMsg,
-                    ),
-                )
+                AppLogger.i(TAG, "Copied bundled asset $name (${outFile.length()} bytes)")
+            }.onFailure { e ->
+                AppLogger.w(TAG, "Asset $name not copied: ${e.message}")
             }
         }
-
-        override fun writeConnectionEvents(events: ConnectionEvents?) = Unit
     }
 
+    @Synchronized
     override fun start(
         profileName: String,
         config: String,
         mtu: Int,
         openTun: () -> Boolean,
     ) {
-        ensureSetup()
+        stopInternal()
+        ensureInit()
 
-        // Clean up any previous session before starting
-        cleanupInternal()
-        resetTrafficCounters()
-
-        openTunCallback = openTun
-        status.value = TunnelStatus(state = TunnelState.STARTING, profileName = profileName)
-
-        // Validate config with sing-box before starting CommandServer
-        runCatching {
-            Libbox.checkConfig(config)
-            AppLogger.i(TAG, "Config validation (Libbox.checkConfig) succeeded")
-        }.onFailure { err ->
-            AppLogger.e(TAG, "Config validation failed: ${err.message}", err)
-            throw IllegalArgumentException(err.message ?: "Invalid sing-box config", err)
-        }
-
-        val platformInterface = Platform()
-        platform = platformInterface
-
-        AppLogger.i(TAG, "Starting CommandServer for profile '$profileName'")
-        val server = CommandServer(serverHandler, platformInterface)
-        server.start()
-        commandServer = server
-
-        AppLogger.i(TAG, "Calling startOrReloadService")
-        server.startOrReloadService(config, OverrideOptions())
-        AppLogger.i(TAG, "startOrReloadService succeeded")
-
-        status.value = status.value.copy(
-            state = TunnelState.STARTED,
-            startedAt = System.currentTimeMillis(),
-            message = "",
+        status.value = TunnelStatus(
+            state = TunnelState.STARTING,
+            profileName = profileName,
         )
+        emitLog(3, "Starting Xray-core for profile: $profileName")
 
-        runCatching {
-            val options = CommandClientOptions().apply {
-                statusInterval = 1_000_000_000L // 1 second in nanoseconds
-                addCommand(Libbox.CommandStatus)
-                addCommand(Libbox.CommandLog)
-                addCommand(Libbox.CommandGroup)
+        try {
+            // 1. Open the Android VPN TUN interface first
+            if (!openTun()) {
+                throw IllegalStateException("VPN permission denied or TUN creation failed")
             }
-            val client = CommandClient(clientHandler, options)
-            client.connect()
-            commandClient = client
-        }.onFailure {
-            AppLogger.w(TAG, "Status CommandClient connection warning: ${it.message}", it)
+
+            // 2. Register ProcessFinder on Android Q+ (just like v2rayNG CoreServiceManager)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                runCatching {
+                    val cm = Application.instance.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                    if (cm != null) {
+                        coreController.registerProcessFinder(AndroidProcessFinder(cm))
+                    }
+                }
+            }
+
+            // 3. Determine whether Xray-core should own the TUN fd directly (`"protocol":"tun"`)
+            //    or `hev-socks5-tunnel` owns the TUN fd (`tunFd = 0` passed to startLoop)
+            val usesNativeXrayTun = config.contains("\"protocol\":\"tun\"") || config.contains("\"protocol\": \"tun\"")
+            val tunFd = if (usesNativeXrayTun) {
+                Engines.tunProvider?.tunFileDescriptor()?.takeIf { it > 0 } ?: 0
+            } else {
+                0
+            }
+
+            emitLog(3, "Calling coreController.startLoop (nativeTun=$usesNativeXrayTun, tunFd=$tunFd)")
+            coreController.startLoop(config, tunFd)
+
+            if (!coreController.isRunning) {
+                throw IllegalStateException("Xray-core failed to enter running state")
+            }
+
+            val startedAt = System.currentTimeMillis()
+            status.value = TunnelStatus(
+                state = TunnelState.STARTED,
+                profileName = profileName,
+                startedAt = startedAt,
+            )
+            emitLog(3, "Xray-core running (${Libv2ray.checkVersionX()})")
+
+            startTrafficStatsPolling(profileName, startedAt)
+        } catch (t: Throwable) {
+            AppLogger.e(TAG, "XrayEngine.start failed: ${t.message}", t)
+            emitLog(5, "Failed to start Xray-core: ${t.message}")
+            stopInternal()
+            status.value = TunnelStatus(
+                state = TunnelState.STOPPED,
+                profileName = profileName,
+                message = t.message ?: "Failed to start Xray-core",
+            )
+            throw t
+        }
+    }
+
+    private fun startTrafficStatsPolling(profileName: String, startedAt: Long) {
+        statsJob?.cancel()
+        statsJob = scope.launch {
+            var totalUp = 0L
+            var totalDown = 0L
+            var lastTick = SystemClock.elapsedRealtime()
+
+            while (isActive && runCatching { coreController.isRunning }.getOrDefault(false)) {
+                delay(1000L)
+                val now = SystemClock.elapsedRealtime()
+                val elapsedSec = ((now - lastTick) / 1000.0).coerceAtLeast(0.5)
+                lastTick = now
+
+                var deltaUp = 0L
+                var deltaDown = 0L
+
+                val rawStats = runCatching { coreController.queryAllOutboundTrafficStats() }.getOrDefault("")
+                if (rawStats.isNotBlank()) {
+                    // Format from AndroidLibXrayLite: tag,direction,value;tag,direction,value;
+                    rawStats.split(';').forEach { entry ->
+                        if (entry.isBlank()) return@forEach
+                        val parts = entry.split(',', limit = 3)
+                        if (parts.size != 3) return@forEach
+                        val tag = parts[0]
+                        val direction = parts[1]
+                        val value = parts[2].toLongOrNull() ?: return@forEach
+                        if (tag == "proxy" || tag == "direct") {
+                            if (direction == "uplink") deltaUp += value
+                            else if (direction == "downlink") deltaDown += value
+                        }
+                    }
+                }
+
+                totalUp += deltaUp
+                totalDown += deltaDown
+                val rateUp = (deltaUp / elapsedSec).toLong()
+                val rateDown = (deltaDown / elapsedSec).toLong()
+
+                val runtime = Runtime.getRuntime()
+                val usedMem = runtime.totalMemory() - runtime.freeMemory()
+
+                val current = status.value
+                if (current.state == TunnelState.STARTED) {
+                    status.value = current.copy(
+                        profileName = profileName,
+                        uplink = rateUp,
+                        downlink = rateDown,
+                        uplinkTotal = totalUp,
+                        downlinkTotal = totalDown,
+                        memory = usedMem,
+                        startedAt = startedAt,
+                    )
+                }
+            }
         }
     }
 
     @Synchronized
-    private fun cleanupInternal() {
-        val client = commandClient
-        commandClient = null
-        val srv = commandServer
-        commandServer = null
-        val plat = platform
-        platform = null
-
-        plat?.closeDefaultInterfaceMonitor(null)
-        runCatching { client?.disconnect() }
-        runCatching { srv?.closeService() }
-        runCatching { srv?.close() }
+    override fun stop() {
+        val lastProfile = status.value.profileName
+        status.value = status.value.copy(state = TunnelState.STOPPING)
+        stopInternal()
+        status.value = TunnelStatus(
+            state = TunnelState.STOPPED,
+            profileName = lastProfile,
+        )
     }
 
-    override fun stop() {
-        AppLogger.i(TAG, "Stopping LibboxEngine")
-        status.value = status.value.copy(state = TunnelState.STOPPING)
-        cleanupInternal()
-        openTunCallback = null
-        status.value = TunnelStatus(state = TunnelState.STOPPED)
-        groups.value = emptyList()
+    private fun stopInternal() {
+        statsJob?.cancel()
+        statsJob = null
+        runCatching {
+            if (initialized.get() && coreController.isRunning) {
+                coreController.stopLoop()
+            }
+        }.onFailure { e ->
+            AppLogger.w(TAG, "coreController.stopLoop warning: ${e.message}")
+        }
+    }
+
+    override fun measureOutboundDelay(config: String, testUrl: String): Long {
+        return try {
+            ensureInit()
+            Libv2ray.measureOutboundDelay(config, testUrl)
+        } catch (t: Throwable) {
+            AppLogger.w(TAG, "measureOutboundDelay failed: ${t.message}")
+            -1L
+        }
+    }
+
+    override fun measureActiveDelay(testUrl: String): Long {
+        return try {
+            if (!initialized.get() || !coreController.isRunning) return -1L
+            coreController.measureDelay(testUrl)
+        } catch (t: Throwable) {
+            AppLogger.w(TAG, "measureActiveDelay failed: ${t.message}")
+            -1L
+        }
     }
 
     override fun selectOutbound(groupTag: String, itemTag: String) {
-        runCatching { commandClient?.selectOutbound(groupTag, itemTag) }
-            .onFailure { AppLogger.w(TAG, "selectOutbound failed", it) }
+        // Not applicable to single-outbound Xray configs
     }
 
     override fun urlTest(groupTag: String) {
-        runCatching { commandClient?.urlTest(groupTag) }
-            .onFailure { AppLogger.w(TAG, "urlTest failed", it) }
+        scope.launch {
+            val d = measureActiveDelay("https://www.gstatic.com/generate_204")
+            emitLog(3, "Active tunnel delay test: ${d}ms")
+        }
     }
 
     override fun clearLogs() {
-        runCatching { commandClient?.clearLogs() }
+        logFlow.resetReplayCache()
     }
 
-    // ------------------------------------------------------ platform layer
-
-    private inner class Platform : PlatformInterface {
-
-        override fun usePlatformAutoDetectInterfaceControl(): Boolean = true
-
-        override fun autoDetectInterfaceControl(fd: Int) {
-            val ok = Engines.tunProvider?.protectSocket(fd) ?: false
-            if (!ok) {
-                AppLogger.w(TAG, "protectSocket($fd) returned false")
-            }
+    private fun emitLog(level: Int, message: String) {
+        val lvl = when (level) {
+            5, 6 -> AppLogger.Level.ERROR
+            4 -> AppLogger.Level.WARN
+            2 -> AppLogger.Level.DEBUG
+            else -> AppLogger.Level.INFO
         }
+        AppLogger.log(lvl, "Xray-core", message)
+        logFlow.tryEmit(TunnelEngine.LogLine(level, System.currentTimeMillis(), message))
+    }
 
-        override fun openTun(options: TunOptions): Int {
-            AppLogger.i(TAG, "Platform.openTun requested (mtu=${options.mtu}, autoRoute=${options.autoRoute})")
-            val ready = openTunCallback?.invoke() ?: false
-            if (!ready) error("tun interface was not established")
-            val fd = Engines.tunProvider?.tunFileDescriptor() ?: -1
-            if (fd < 0) error("no tun descriptor available")
-            AppLogger.i(TAG, "Platform.openTun established fd=$fd")
-            return fd
-        }
-
-        override fun useProcFS(): Boolean = Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
-
-        // IMPORTANT: Must NEVER return null; service.go dereferences result.UserId when err == nil!
-        @SuppressLint("NewApi")
-        override fun findConnectionOwner(
-            ipProtocol: Int,
-            sourceAddress: String?,
-            sourcePort: Int,
-            destinationAddress: String?,
-            destinationPort: Int,
-        ): ConnectionOwner {
-            val emptyOwner = ConnectionOwner().apply {
-                userId = -1
-                userName = ""
-                setAndroidPackageNames(StringArray(emptyList<String>().iterator()))
-            }
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                return emptyOwner
-            }
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private class AndroidProcessFinder(
+        private val connectivityManager: ConnectivityManager,
+    ) : ProcessFinder {
+        override fun findProcessByConnection(
+            network: String?,
+            srcIP: String?,
+            srcPort: Long,
+            destIP: String?,
+            destPort: Long,
+        ): Long {
             return try {
-                val app = app.nebulabox.Application.instance
-                val cm = app.getSystemService(ConnectivityManager::class.java) ?: return emptyOwner
-                val uid = cm.getConnectionOwnerUid(
-                    ipProtocol,
-                    InetSocketAddress(sourceAddress ?: "", sourcePort),
-                    InetSocketAddress(destinationAddress ?: "", destinationPort),
-                )
-                if (uid == Process.INVALID_UID || uid < 0) {
-                    return emptyOwner
+                val proto = when (network?.lowercase()) {
+                    "tcp", "tcp4", "tcp6" -> android.system.OsConstants.IPPROTO_TCP
+                    "udp", "udp4", "udp6" -> android.system.OsConstants.IPPROTO_UDP
+                    else -> return -1L
                 }
-                val packages = uidPackageCache.getOrPut(uid) {
-                    runCatching {
-                        app.packageManager.getPackagesForUid(uid)?.toList().orEmpty()
-                    }.getOrDefault(emptyList())
-                }
-                ConnectionOwner().apply {
-                    userId = uid
-                    userName = packages.firstOrNull() ?: ""
-                    setAndroidPackageNames(StringArray(packages.iterator()))
-                }
+                val local = InetSocketAddress(srcIP ?: return -1L, srcPort.toInt())
+                val remote = InetSocketAddress(destIP ?: return -1L, destPort.toInt())
+                connectivityManager.getConnectionOwnerUid(proto, local, remote).toLong()
             } catch (_: Throwable) {
-                emptyOwner
+                -1L
             }
         }
-
-        override fun getInterfaces(): NetworkInterfaceIterator {
-            val interfaces = mutableListOf<io.nekohasekai.libbox.NetworkInterface>()
-            runCatching {
-                val app = app.nebulabox.Application.instance
-                val cm = app.getSystemService(ConnectivityManager::class.java)
-                val kernelInterfaces = runCatching {
-                    NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-                }.getOrDefault(emptyList())
-
-                if (cm != null) {
-                    for (network in cm.allNetworks) {
-                        val linkProperties = cm.getLinkProperties(network) ?: continue
-                        val networkCapabilities = cm.getNetworkCapabilities(network) ?: continue
-                        val ifaceName = linkProperties.interfaceName ?: continue
-                        if (ifaceName.isBlank()) continue
-                        val networkInterface = kernelInterfaces.find { it.name == ifaceName } ?: continue
-
-                        val boxInterface = io.nekohasekai.libbox.NetworkInterface()
-                        boxInterface.name = ifaceName
-                        boxInterface.index = networkInterface.index
-                        boxInterface.mtu = runCatching { networkInterface.mtu.takeIf { it > 0 } ?: 1500 }.getOrDefault(1500)
-
-                        boxInterface.dnsServer = StringArray(
-                            linkProperties.dnsServers.mapNotNull { it.hostAddress?.substringBefore('%') }
-                                .filter { it.isNotBlank() }
-                                .iterator(),
-                        )
-                        boxInterface.gateway = StringArray(
-                            linkProperties.routes
-                                .filter { it.destination.prefixLength == 0 }
-                                .mapNotNull { it.gateway?.hostAddress?.substringBefore('%') }
-                                .filter { it.isNotBlank() && it != "0.0.0.0" && it != "::" }
-                                .iterator(),
-                        )
-                        boxInterface.type = when {
-                            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> Libbox.InterfaceTypeWIFI
-                            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> Libbox.InterfaceTypeCellular
-                            networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> Libbox.InterfaceTypeEthernet
-                            else -> Libbox.InterfaceTypeOther
-                        }
-
-                        val validPrefixes = networkInterface.interfaceAddresses
-                            .mapNotNull { it.toValidPrefixOrNull() }
-                        boxInterface.addresses = StringArray(validPrefixes.iterator())
-
-                        var dumpFlags = 0
-                        if (networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-                            dumpFlags = OsConstants.IFF_UP or OsConstants.IFF_RUNNING
-                        }
-                        if (networkInterface.isLoopback) {
-                            dumpFlags = dumpFlags or OsConstants.IFF_LOOPBACK
-                        }
-                        if (networkInterface.isPointToPoint) {
-                            dumpFlags = dumpFlags or OsConstants.IFF_POINTOPOINT
-                        }
-                        if (networkInterface.supportsMulticast()) {
-                            dumpFlags = dumpFlags or OsConstants.IFF_MULTICAST
-                        }
-                        boxInterface.flags = dumpFlags
-                        boxInterface.metered = !networkCapabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
-                        interfaces.add(boxInterface)
-                    }
-                }
-
-                // Fallback if ConnectivityManager.allNetworks returned nothing
-                if (interfaces.isEmpty()) {
-                    for (iface in kernelInterfaces) {
-                        if (!iface.isUp || iface.isLoopback || iface.name.startsWith("tun") || iface.name.startsWith("dummy")) {
-                            continue
-                        }
-                        val validPrefixes = iface.interfaceAddresses.mapNotNull { it.toValidPrefixOrNull() }
-                        if (validPrefixes.isEmpty()) continue
-                        val box = io.nekohasekai.libbox.NetworkInterface()
-                        box.name = iface.name
-                        box.index = iface.index
-                        box.mtu = runCatching { iface.mtu.takeIf { it > 0 } ?: 1500 }.getOrDefault(1500)
-                        box.addresses = StringArray(validPrefixes.iterator())
-                        box.gateway = StringArray(emptyList<String>().iterator())
-                        box.dnsServer = StringArray(emptyList<String>().iterator())
-                        box.type = Libbox.InterfaceTypeOther
-                        var flags = OsConstants.IFF_UP or OsConstants.IFF_RUNNING
-                        if (iface.isPointToPoint) flags = flags or OsConstants.IFF_POINTOPOINT
-                        if (iface.supportsMulticast()) flags = flags or OsConstants.IFF_MULTICAST
-                        box.flags = flags
-                        box.metered = false
-                        interfaces.add(box)
-                    }
-                }
-            }.onFailure {
-                AppLogger.e(TAG, "getInterfaces error", it)
-            }
-            return InterfaceArray(interfaces.iterator())
-        }
-
-        override fun underNetworkExtension(): Boolean = false
-
-        override fun includeAllNetworks(): Boolean = false
-
-        override fun clearDNSCache() = Unit
-
-        override fun readWIFIState(): WIFIState? = null
-
-        override fun localDNSTransport(): LocalDNSTransport? = null
-
-        private var networkCallback: ConnectivityManager.NetworkCallback? = null
-
-        override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
-            listener ?: return
-            val cm = runCatching {
-                app.nebulabox.Application.instance.getSystemService(ConnectivityManager::class.java)
-            }.getOrNull()
-
-            fun notifyDefaultInterface(network: Network?) {
-                monitorHandler.post {
-                    runCatching {
-                        if (network != null && cm != null) {
-                            val caps = cm.getNetworkCapabilities(network)
-                            if (caps != null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-                                for (attempt in 0 until 5) {
-                                    val lp = cm.getLinkProperties(network)
-                                    val ifaceName = lp?.interfaceName
-                                    if (!ifaceName.isNullOrBlank()) {
-                                        val ni = runCatching { NetworkInterface.getByName(ifaceName) }.getOrNull()
-                                        if (ni != null) {
-                                            AppLogger.i(TAG, "Default interface updated: $ifaceName (index=${ni.index})")
-                                            listener.updateDefaultInterface(ifaceName, ni.index, false, false)
-                                            return@runCatching
-                                        }
-                                    }
-                                    Thread.sleep(50)
-                                }
-                            }
-                        }
-                        // Fallback: find active non-VPN network from allNetworks
-                        if (cm != null) {
-                            for (net in cm.allNetworks) {
-                                val caps = cm.getNetworkCapabilities(net) ?: continue
-                                if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
-                                if (!caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) continue
-                                val lp = cm.getLinkProperties(net) ?: continue
-                                val ifaceName = lp.interfaceName ?: continue
-                                val ni = runCatching { NetworkInterface.getByName(ifaceName) }.getOrNull() ?: continue
-                                AppLogger.i(TAG, "Default interface (fallback network): $ifaceName (index=${ni.index})")
-                                listener.updateDefaultInterface(ifaceName, ni.index, false, false)
-                                return@runCatching
-                            }
-                        }
-                        // Second fallback: physical network interface
-                        val fallback = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-                            .firstOrNull { ni ->
-                                ni.isUp && !ni.isLoopback && !ni.isPointToPoint &&
-                                    !ni.name.startsWith("tun") && !ni.name.startsWith("ppp") &&
-                                    !ni.name.startsWith("dummy")
-                            }
-                        if (fallback != null) {
-                            AppLogger.i(TAG, "Default interface (kernel fallback): ${fallback.name} (index=${fallback.index})")
-                            listener.updateDefaultInterface(fallback.name, fallback.index, false, false)
-                        }
-                    }.onFailure {
-                        AppLogger.w(TAG, "notifyDefaultInterface warning", it)
-                    }
-                }
-            }
-
-            notifyDefaultInterface(cm?.activeNetwork)
-
-            if (cm != null) {
-                val request = NetworkRequest.Builder()
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)
-                    .build()
-
-                val cb = object : ConnectivityManager.NetworkCallback() {
-                    override fun onAvailable(network: Network) {
-                        notifyDefaultInterface(network)
-                    }
-
-                    override fun onCapabilitiesChanged(
-                        network: Network,
-                        networkCapabilities: NetworkCapabilities,
-                    ) {
-                        if (!networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-                            notifyDefaultInterface(network)
-                        }
-                    }
-
-                    override fun onLost(network: Network) {
-                        notifyDefaultInterface(null)
-                    }
-                }
-                networkCallback = cb
-                runCatching {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        cm.registerBestMatchingNetworkCallback(request, cb, monitorHandler)
-                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        cm.requestNetwork(request, cb, monitorHandler)
-                    } else {
-                        cm.registerDefaultNetworkCallback(cb)
-                    }
-                }.onFailure {
-                    AppLogger.w(TAG, "NetworkCallback registration fallback", it)
-                    runCatching { cm.registerDefaultNetworkCallback(cb) }
-                }
-            }
-        }
-
-        override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
-            val cb = networkCallback ?: return
-            networkCallback = null
-            runCatching {
-                val cm = app.nebulabox.Application.instance.getSystemService(ConnectivityManager::class.java)
-                cm?.unregisterNetworkCallback(cb)
-            }
-        }
-
-        override fun startNeighborMonitor(listener: NeighborUpdateListener?) = Unit
-
-        override fun closeNeighborMonitor(listener: NeighborUpdateListener?) = Unit
-
-        override fun usePlatformShell(): Boolean = false
-
-        override fun checkPlatformShell() {
-            error("shell is not supported on Android")
-        }
-
-        override fun openShellSession(
-            user: PlatformUser?,
-            command: String?,
-            environ: StringIterator?,
-            term: String?,
-            rows: Int,
-            cols: Int,
-        ): ShellSession {
-            error("shell is not supported on Android")
-        }
-
-        override fun readSystemSSHHostKey(): String {
-            error("not supported")
-        }
-
-        override fun lookupSFTPServer(): String {
-            error("not supported")
-        }
-
-        override fun tailscaleHostname(): String = runCatching {
-            Settings.Global.getString(
-                app.nebulabox.Application.instance.contentResolver,
-                Settings.Global.DEVICE_NAME,
-            )?.takeIf { it.isNotBlank() }
-        }.getOrNull() ?: "${Build.MANUFACTURER} ${Build.MODEL}"
-
-        override fun usePlatformBridge(): Boolean = false
-
-        override fun createBridge(options: BridgeOptions?): BridgeSession {
-            error("bridge mode requires root")
-        }
-
-        // IMPORTANT: Must NEVER return null; service.go dereferences platformUser.Username when err == nil!
-        override fun lookupUser(username: String?): PlatformUser {
-            val name = username?.takeIf { it.isNotBlank() } ?: error("empty username")
-            val pm = app.nebulabox.Application.instance.packageManager
-            val appInfo = runCatching { pm.getApplicationInfo(name, 0) }.getOrNull()
-                ?: error("user not found: $name")
-            return PlatformUser().apply {
-                this.username = appInfo.packageName
-                this.uid = appInfo.uid
-                this.gid = appInfo.uid
-                this.homeDir = appInfo.dataDir ?: "/data/user/0/${appInfo.packageName}"
-            }
-        }
-
-        override fun registerMyInterface(name: String?) {
-            if (!name.isNullOrBlank()) {
-                AppLogger.i(TAG, "Registered TUN interface: $name")
-            }
-        }
-
-        override fun sendNotification(notification: Notification?) = Unit
-
-        override fun cancelNotification(identifier: String?, typeID: Int) = Unit
-
-        /**
-         * Safely converts an [InterfaceAddress] into a CIDR prefix for Go's `netip.MustParsePrefix`.
-         * Returns null if the address or prefix length is invalid so `netip.MustParsePrefix` never panics.
-         */
-        private fun InterfaceAddress.toValidPrefixOrNull(): String? {
-            val addr = address ?: return null
-            val prefixLen = networkPrefixLength.toInt()
-            return when (addr) {
-                is Inet6Address -> {
-                    if (prefixLen !in 0..128) return null
-                    val rawHost = runCatching {
-                        Inet6Address.getByAddress(addr.address).hostAddress
-                    }.getOrNull() ?: addr.hostAddress ?: return null
-                    val cleanHost = rawHost.substringBefore('%').trim()
-                    if (cleanHost.isEmpty() || !cleanHost.contains(':')) return null
-                    "$cleanHost/$prefixLen"
-                }
-                is Inet4Address -> {
-                    if (prefixLen !in 0..32) return null
-                    val cleanHost = (addr.hostAddress ?: return null).substringBefore('%').trim()
-                    if (cleanHost.isEmpty() || !cleanHost.contains('.')) return null
-                    "$cleanHost/$prefixLen"
-                }
-                else -> null
-            }
-        }
-    }
-
-    private class StringArray(private val iterator: Iterator<String>) : StringIterator {
-        override fun len(): Int = 0
-        override fun hasNext(): Boolean = iterator.hasNext()
-        override fun next(): String = iterator.next()
-    }
-
-    private class InterfaceArray(
-        private val iterator: Iterator<io.nekohasekai.libbox.NetworkInterface>,
-    ) : NetworkInterfaceIterator {
-        override fun hasNext(): Boolean = iterator.hasNext()
-        override fun next(): io.nekohasekai.libbox.NetworkInterface = iterator.next()
     }
 
     companion object {
-        private const val TAG = "LibboxEngine"
-        private val ANSI_REGEX = Regex("\\u001B\\[[0-9;]*[A-Za-z]")
-
-        private fun stripAnsi(text: String): String =
-            ANSI_REGEX.replace(text, "")
+        private const val TAG = "XrayEngine"
     }
 }
