@@ -85,9 +85,12 @@ data class TlsSettings(
     val realityShortId: String = "",
     val realitySpiderX: String = "",
     val utls: Boolean = false,
-    val utlsFingerprint: String = "chrome",
+    val utlsFingerprint: String = "",
     val echConfigList: String = "",
+    val echForceQuery: String = "",
     val pinnedCA256: String = "",
+    val verifyPeerCertByName: String = "",
+    val mldsa65Verify: String = "",
 )
 
 /** Subscription group item (aligned with v2rayNG SubscriptionItem). */
@@ -123,6 +126,7 @@ data class Profile(
     val obfsPassword: String = "",     // hysteria2 salamander obfs password
     val portHopping: String = "",      // hysteria2 mport e.g. "20000-50000"
     val portHoppingInterval: String = "30",
+    val finalMask: String = "",        // Xray finalmask JSON from &fm=
 
     // vmess specifics
     val alterId: Int = 0,
@@ -149,7 +153,7 @@ data class Profile(
     val transport: Transport = Transport(),
     val tls: TlsSettings = TlsSettings(),
 
-    // Raw custom Xray or sing-box JSON configuration (full config or single outbound)
+    // Raw custom Xray JSON configuration (matching v2rayNG EConfigType.CUSTOM)
     val customConfig: String = "",
 
     val subscriptionId: String = "",
@@ -157,7 +161,8 @@ data class Profile(
     val remark: String = "",
     var order: Int = 0,
     var lastTestedAt: Long = 0,
-    var lastDelayMs: Int = -1,
+    // 0 = untested (renders empty string ""), > 0 = ms in green, < 0 (-1) = failed in red (matches v2rayNG testDelayMillis)
+    var lastDelayMs: Int = 0,
 ) {
     val displayName: String
         get() = name.ifBlank {
@@ -168,6 +173,43 @@ data class Profile(
                 else -> protocol.wire
             }
         }
+
+    /**
+     * Type description matching v2rayNG's `MainServerRowModels.buildTypeDescription`:
+     * e.g. `VLESS / ws / tls` or `CUSTOM`.
+     */
+    val typeDescription: String
+        get() {
+            if (protocol == Protocol.CUSTOM) return "CUSTOM"
+            return buildList {
+                add(protocol.name)
+                val net = transport.type.trim()
+                if (net.isNotEmpty() && protocol != Protocol.WIREGUARD) add(net)
+                when {
+                    tls.reality -> add("reality")
+                    tls.enabled -> add("tls")
+                }
+            }.joinToString(" / ")
+        }
+
+    /**
+     * Formatted address line matching v2rayNG's `MainServerRowModels`:
+     * `example.com : 443`.
+     */
+    val formattedAddress: String
+        get() {
+            val s = server.trim()
+            if (s.isEmpty()) return if (protocol == Protocol.CUSTOM) "Custom Xray Configuration" else ""
+            val masked = if (s.contains(":") && !s.startsWith("[")) "[$s]" else s
+            return if (serverPort > 0) "$masked : $serverPort" else masked
+        }
+
+    /**
+     * Delay string matching v2rayNG's `ServerAffiliationInfo.getTestDelayString()`:
+     * `0` -> `""` (nothing displayed before testing), `> 0` -> `"123 ms"`, `< 0` -> `"-1 ms"`.
+     */
+    val testDelayString: String
+        get() = if (lastDelayMs == 0) "" else "$lastDelayMs ms"
 
     /**
      * Identity key for deduplication (matches v2rayNG ProfileItem.duplicateIdentity).

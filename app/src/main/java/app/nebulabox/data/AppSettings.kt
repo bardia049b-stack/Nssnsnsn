@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class AppSettings(
-    val settingsVersion: Int = 3,
+    val settingsVersion: Int = 4,
     val language: String = "system",       // system | en | fa
     val theme: String = "system",          // system | light | dark
     val dynamicColor: Boolean = false,
@@ -25,9 +25,10 @@ data class AppSettings(
     val bypassChina: Boolean = false,
     val blockAds: Boolean = false,
 
-    // DNS (aligned with v2rayNG defaults)
+    // DNS (aligned with v2rayNG 2.3.10 defaults)
+    val localDnsEnabled: Boolean = false,  // Matches v2rayNG PREF_LOCAL_DNS_ENABLED = false by default
     val remoteDns: String = "https://cloudflare-dns.com/dns-query",
-    val directDns: String = "8.8.8.8",
+    val directDns: String = "223.5.5.5",
     val vpnDns: String = "1.1.1.1",
     val dnsStrategy: String = "ipv4_only",
     val fakeDns: Boolean = false,
@@ -84,8 +85,8 @@ data class AppSettings(
         } else {
             remoteDns
         }
-        val validDirectDns = if (directDns == "1.1.1.1" || directDns.isBlank()) "8.8.8.8" else directDns
-        if (settingsVersion >= 3 &&
+        val validDirectDns = if (directDns == "1.1.1.1" || directDns.isBlank()) "223.5.5.5" else directDns
+        if (settingsVersion >= 4 &&
             mtu == validMtu &&
             socksPort == validPort &&
             logLevel == validLogLevel &&
@@ -95,12 +96,13 @@ data class AppSettings(
             return this
         }
         return copy(
-            settingsVersion = 3,
+            settingsVersion = 4,
             mtu = validMtu,
             socksPort = validPort,
             logLevel = validLogLevel,
             remoteDns = validRemoteDns,
             directDns = validDirectDns,
+            localDnsEnabled = false,
             tcpFastOpen = false,
             tcpMux = false,
             meteredNetwork = false,

@@ -4,8 +4,16 @@ import app.nebulabox.data.AppSettings
 import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
 import app.nebulabox.util.AppLogger
-import app.nebulabox.util.Json
 import app.nebulabox.util.ShareLinkParser
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.google.gson.JsonPrimitive
+import com.v2ray.ang.AppConfig
+import com.v2ray.ang.dto.V2rayConfig
+import com.v2ray.ang.dto.V2rayConfig.OutboundBean.OutSettingsBean
+import com.v2ray.ang.dto.V2rayConfig.OutboundBean.StreamSettingsBean
+import com.v2ray.ang.enums.NetworkType
+import com.v2ray.ang.util.JsonUtil
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
@@ -14,363 +22,881 @@ import java.net.InetAddress
  * Translates a [Profile] + [AppSettings] pair into an Xray-core v1.260327.1
  * (`2dust/AndroidLibXrayLite v26.9.30` / `v2rayNG 2.3.10`) JSON configuration.
  *
- * Strictly aligned with `v2rayNG`'s `CoreConfigManager.kt` & `CoreOutboundBuilder.kt`:
- *  - `buildForSpeedtest`: matches `postProcessForSpeedtest()` (`inbounds = []`, `routing.rules = []`,
- *    `dns = null`, `mux = null`), so real-ping tests never load `geosite.dat`/`geoip.dat`.
- *  - `build`: includes `v2rayNG`'s hardcoded DoH/DoT bootstrap hosts in `dns.hosts`,
- *    pre-resolves the proxy server domain via Android system DNS (`resolveOutboundDomainsToHosts`),
- *    uses `"domain:ir", "geosite:category-ir"` + `"geoip:ir"` for `white_iran` (never `"geosite:ir"`),
- *    and hijacks port 53 via `dns-out` (`"protocol": "dns"`).
+ * Built directly on `v2rayNG 2.3.10`'s [V2rayConfig], [JsonUtil], `CoreOutboundBuilder`,
+ * and `CoreConfigManager`:
+ *  1. Custom configs (`Protocol.CUSTOM`): Matches `CoreConfigManager.buildV2rayCustomConfig` &
+ *     `getV2rayConfig4Speedtest` (`if (configContext.isCustom) return buildV2rayCustomConfig`),
+ *     preserving original `inbounds` (`mixed-in`, `dns-in`), `outbounds`, `finalmask`, `echConfigList`,
+ *     `dns`, and `routing` when `useHevTun == true`.
+ *  2. Speedtest configs (`buildForSpeedtest`): Matches `CoreConfigManager.buildV2raySpeedtestConfig` +
+ *     `postProcessForSpeedtest` (`inbounds.clear()`, `routing.rules.clear()`, `dns = null`, `mux = null`,
+ *     and does NOT call `resolveOutboundDomainsToHosts`).
+ *  3. Normal configs (`build`): Matches `CoreConfigManager.buildV2rayNormalConfig`, including
+ *     `configureOutbounds`, `configureRouting`, `configureDns`, `configureLocalDns`, and
+ *     `resolveOutboundDomainsToHosts` (with `HappyEyeballsBean.maxConcurrentTry = 4` so Xray's
+ *     `TcpRaceDial` is always active).
  */
 object ConfigBuilder {
-
-    private fun mapObj(vararg pairs: Pair<String, Any?>): Map<String, Any?> {
-        val m = LinkedHashMap<String, Any?>()
-        for ((k, v) in pairs) {
-            if (v != null) m[k] = v
-        }
-        return m
-    }
 
     fun build(profile: Profile, settings: AppSettings): String {
         val s = settings.normalized()
         if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
-            return buildCustomConfig(profile, s, forSpeedtest = false)
+            return buildV2rayCustomConfig(profile, s)
         }
-        return buildStandardXrayConfig(profile, s, forSpeedtest = false, includeGeoRules = true)
+        return buildV2rayNormalConfig(profile, s, includeGeoRules = true)
     }
 
     /**
      * Fallback config without any `geosite:` / `geoip:` rules in case geo asset files
-     * are unavailable or corrupted on disk.
+     * are unavailable on disk.
      */
     fun buildWithoutGeoRules(profile: Profile, settings: AppSettings): String {
         val s = settings.normalized()
         if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
-            return buildCustomConfig(profile, s, forSpeedtest = false)
+            return buildV2rayCustomConfig(profile, s)
         }
-        return buildStandardXrayConfig(profile, s, forSpeedtest = false, includeGeoRules = false)
+        return buildV2rayNormalConfig(profile, s, includeGeoRules = false)
     }
 
     /**
-     * Generates a lightweight Xray config for `Libv2ray.measureOutboundDelay`,
-     * matching `v2rayNG`'s `CoreConfigManager.getV2rayConfig4Speedtest` (`postProcessForSpeedtest`).
+     * Matches `v2rayNG 2.3.10` `CoreConfigManager.getV2rayConfig4Speedtest`:
+     *  - If `profile.protocol == Protocol.CUSTOM`, returns `buildV2rayCustomConfig` untouched!
+     *  - Otherwise returns `buildV2raySpeedtestConfig`.
      */
     fun buildForSpeedtest(profile: Profile, settings: AppSettings): String {
         val s = settings.normalized()
         if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
-            return buildCustomConfig(profile, s, forSpeedtest = true)
+            return buildV2rayCustomConfig(profile, s)
         }
-        return buildStandardXrayConfig(profile, s, forSpeedtest = true, includeGeoRules = false)
+        return buildV2raySpeedtestConfig(profile, s)
     }
 
-    private fun defaultBootstrapDnsHosts(): LinkedHashMap<String, Any?> = linkedMapOf(
-        "domain:googleapis.cn" to "googleapis.com",
-        "dns.alidns.com" to listOf("223.5.5.5", "223.6.6.6", "2400:3200::1", "2400:3200:baba::1"),
-        "one.one.one.one" to listOf("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"),
-        "1dot1dot1dot1.cloudflare-dns.com" to listOf("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"),
-        "dns.cloudflare.com" to listOf("162.159.61.8", "172.64.41.8", "2a06:98c1:52::8", "2803:f800:53::8"),
-        "cloudflare-dns.com" to listOf("104.16.248.249", "104.16.249.249", "2606:4700::6810:f8f9", "2606:4700::6810:f9f9"),
-        "dns.google" to listOf("8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"),
-        "dns.quad9.net" to listOf("9.9.9.9", "149.112.112.112", "2620:fe::fe", "2620:fe::9"),
-    )
+    // --------------------------------------------------------- initV2rayConfig
 
-    private fun buildStandardXrayConfig(
+    private fun initV2rayConfig(settings: AppSettings): V2rayConfig {
+        val inbounds = arrayListOf(
+            V2rayConfig.InboundBean(
+                tag = "socks",
+                port = settings.socksPort,
+                protocol = "socks",
+                listen = if (settings.allowLan) "0.0.0.0" else AppConfig.LOOPBACK,
+                settings = V2rayConfig.InboundBean.InSettingsBean(
+                    auth = "noauth",
+                    udp = true,
+                    userLevel = 8,
+                ),
+                sniffing = V2rayConfig.InboundBean.SniffingBean(
+                    enabled = settings.sniffing || settings.fakeDns,
+                    destOverride = buildList {
+                        if (settings.sniffing) {
+                            add("http")
+                            add("tls")
+                            add("quic")
+                        }
+                        if (settings.fakeDns) {
+                            add("fakedns")
+                        }
+                    }.let { ArrayList(it.ifEmpty { listOf("http", "tls", "quic") }) },
+                    routeOnly = settings.routeOnly,
+                ),
+            ),
+        )
+
+        if (!settings.useHevTun) {
+            inbounds.add(
+                V2rayConfig.InboundBean(
+                    tag = "tun",
+                    port = 0,
+                    protocol = "tun",
+                    settings = V2rayConfig.InboundBean.InSettingsBean(
+                        name = "xray0",
+                        MTU = settings.mtu,
+                        userLevel = 8,
+                    ),
+                    sniffing = V2rayConfig.InboundBean.SniffingBean(
+                        enabled = settings.sniffing || settings.fakeDns,
+                        destOverride = buildList {
+                            if (settings.sniffing) {
+                                add("http")
+                                add("tls")
+                                add("quic")
+                            }
+                            if (settings.fakeDns) {
+                                add("fakedns")
+                            }
+                        }.let { ArrayList(it.ifEmpty { listOf("http", "tls", "quic") }) },
+                        routeOnly = settings.routeOnly,
+                    ),
+                ),
+            )
+        }
+
+        val directOutbound = V2rayConfig.OutboundBean(
+            tag = AppConfig.TAG_DIRECT,
+            protocol = "freedom",
+            settings = OutSettingsBean(),
+            streamSettings = StreamSettingsBean(
+                network = null,
+                sockopt = StreamSettingsBean.SockoptBean(
+                    domainStrategy = "UseIP",
+                    happyEyeballs = StreamSettingsBean.HappyEyeballsBean(
+                        tryDelayMs = 250,
+                        interleave = 2,
+                        maxConcurrentTry = 4,
+                    ),
+                ),
+            ),
+            mux = null,
+        )
+
+        val blockOutbound = V2rayConfig.OutboundBean(
+            tag = AppConfig.TAG_BLOCKED,
+            protocol = "blackhole",
+            settings = OutSettingsBean(
+                response = OutSettingsBean.Response(type = "http"),
+            ),
+            streamSettings = null,
+            mux = null,
+        )
+
+        return V2rayConfig(
+            remarks = null,
+            stats = emptyMap<String, Any>(),
+            log = V2rayConfig.LogBean(loglevel = settings.logLevel),
+            policy = V2rayConfig.PolicyBean(
+                levels = mapOf(
+                    "8" to V2rayConfig.PolicyBean.LevelBean(
+                        handshake = 4,
+                        connIdle = 300,
+                        uplinkOnly = 1,
+                        downlinkOnly = 1,
+                    ),
+                ),
+                system = mapOf(
+                    "statsOutboundUplink" to true,
+                    "statsOutboundDownlink" to true,
+                ),
+            ),
+            inbounds = inbounds,
+            outbounds = arrayListOf(directOutbound, blockOutbound),
+            dns = V2rayConfig.DnsBean(
+                hosts = LinkedHashMap(),
+                servers = ArrayList(),
+            ),
+            routing = V2rayConfig.RoutingBean(
+                domainStrategy = settings.domainStrategy.ifBlank { "AsIs" },
+                rules = ArrayList(),
+            ),
+        )
+    }
+
+    // --------------------------------------------------- buildV2rayNormalConfig
+
+    private fun buildV2rayNormalConfig(
         profile: Profile,
         settings: AppSettings,
-        forSpeedtest: Boolean,
         includeGeoRules: Boolean,
     ): String {
-        val dnsHosts = defaultBootstrapDnsHosts()
+        val v2rayConfig = initV2rayConfig(settings)
+        v2rayConfig.remarks = profile.displayName
+        v2rayConfig.log.loglevel = settings.logLevel
 
-        val proxyOutbound = buildOutbound(profile, settings, dnsHosts, forSpeedtest)
-        val directOutbound = mapObj(
-            "tag" to "direct",
-            "protocol" to "freedom",
-            "settings" to emptyMap<String, Any?>(),
-            "streamSettings" to mapObj(
-                "sockopt" to mapObj(
-                    "domainStrategy" to "UseIP",
-                    "happyEyeballs" to mapObj(
-                        "tryDelayMs" to 250,
-                        "interleave" to 2,
-                    ),
-                ),
-            ),
-        )
-        val blockOutbound = mapObj(
-            "tag" to "block",
-            "protocol" to "blackhole",
-            "settings" to mapObj(
-                "response" to mapObj("type" to "http"),
-            ),
-        )
-
-        // Matches v2rayNG's postProcessForSpeedtest:
-        // When forSpeedtest == true, strip inbounds, dns, fakedns, stats, policy, and routing rules.
-        if (forSpeedtest) {
-            val speedtestRoot = mapObj(
-                "remarks" to profile.displayName,
-                "log" to mapObj("loglevel" to "warning"),
-                "outbounds" to listOf(proxyOutbound, directOutbound, blockOutbound),
-                "routing" to mapObj(
-                    "domainStrategy" to "AsIs",
-                    "rules" to emptyList<Map<String, Any?>>(),
-                ),
-            )
-            return Json.any(speedtestRoot)
-        }
-
-        val dnsOutbound = mapObj(
-            "tag" to "dns-out",
-            "protocol" to "dns",
-        )
-        val outbounds = listOf(proxyOutbound, directOutbound, blockOutbound, dnsOutbound)
-
-        val root = linkedMapOf<String, Any?>()
-        root["remarks"] = profile.displayName
-        root["log"] = mapObj("loglevel" to settings.logLevel)
-        root["stats"] = emptyMap<String, Any?>()
-        root["policy"] = mapObj(
-            "levels" to mapObj(
-                "8" to mapObj(
-                    "handshake" to 4,
-                    "connIdle" to 300,
-                    "uplinkOnly" to 1,
-                    "downlinkOnly" to 1,
-                ),
-            ),
-            "system" to mapObj(
-                "statsOutboundUplink" to true,
-                "statsOutboundDownlink" to true,
-            ),
-        )
-        root["inbounds"] = buildInbounds(settings)
         if (settings.fakeDns) {
-            root["fakedns"] = listOf(
-                mapObj(
-                    "ipPool" to "198.18.0.0/15",
-                    "poolSize" to 10000,
-                ),
-            )
-        }
-        root["dns"] = buildDns(settings, dnsHosts, includeGeoRules)
-        root["outbounds"] = outbounds
-        root["routing"] = buildRouting(profile, settings, includeGeoRules)
-
-        return Json.any(root)
-    }
-
-    // --------------------------------------------------------------- Inbounds
-
-    private fun buildInbounds(settings: AppSettings): List<Map<String, Any?>> {
-        val list = mutableListOf<Map<String, Any?>>()
-        val sniffingEnabled = settings.sniffing || settings.fakeDns
-        val destOverride = mutableListOf<String>()
-        if (settings.sniffing) {
-            destOverride.addAll(listOf("http", "tls", "quic"))
-        }
-        if (settings.fakeDns) {
-            destOverride.add("fakedns")
+            v2rayConfig.fakedns = listOf(V2rayConfig.FakednsBean())
         }
 
-        val sniffingObj = mapObj(
-            "enabled" to sniffingEnabled,
-            "destOverride" to destOverride.ifEmpty { listOf("http", "tls", "quic") },
-            "routeOnly" to settings.routeOnly,
-        )
+        val proxyOutbound = buildOutboundWithGlobalSettings(profile, settings)
+        v2rayConfig.outbounds.add(0, proxyOutbound)
 
-        // 1. Local SOCKS5 inbound (v2rayNG default port 10808)
-        list.add(
-            mapObj(
-                "tag" to "socks",
-                "port" to settings.socksPort,
-                "listen" to if (settings.allowLan) "0.0.0.0" else "127.0.0.1",
-                "protocol" to "socks",
-                "settings" to mapObj(
-                    "auth" to "noauth",
-                    "udp" to true,
-                    "userLevel" to 8,
-                ),
-                "sniffing" to sniffingObj,
-            ),
-        )
-
-        // 2. Native Xray TUN inbound (used when useHevTun == false)
+        configureRouting(profile, settings, v2rayConfig, includeGeoRules)
+        configureDns(settings, v2rayConfig, includeGeoRules)
+        configureLocalDns(settings, v2rayConfig)
         if (!settings.useHevTun) {
-            list.add(
-                mapObj(
-                    "tag" to "tun",
-                    "port" to 0,
-                    "protocol" to "tun",
-                    "settings" to mapObj(
-                        "name" to "xray0",
-                        "MTU" to settings.mtu,
-                        "userLevel" to 8,
-                    ),
-                    "sniffing" to sniffingObj,
-                ),
-            )
+            configureRootModeDns(v2rayConfig)
         }
 
-        return list
+        resolveOutboundDomainsToHosts(settings, v2rayConfig)
+
+        return JsonUtil.toJsonPretty(v2rayConfig) ?: "{}"
     }
 
-    // ------------------------------------------------------------------- DNS
+    // ------------------------------------------------- buildV2raySpeedtestConfig
 
-    private fun buildDns(
-        settings: AppSettings,
-        dnsHosts: Map<String, Any?>,
-        includeGeoRules: Boolean,
-    ): Map<String, Any?> {
-        val servers = mutableListOf<Any?>()
-        if (settings.fakeDns) {
-            servers.add("fakedns")
-        }
-
-        val remote = settings.remoteDns.trim().ifBlank { "https://cloudflare-dns.com/dns-query" }
-        servers.add(remote)
-
-        val direct = settings.directDns.trim().ifBlank { "8.8.8.8" }
-        if (includeGeoRules && settings.routeMode == "white_iran") {
-            // Exact v2rayNG custom_routing_white_iran domain list: "domain:ir", "geosite:category-ir"
-            servers.add(
-                mapObj(
-                    "address" to direct,
-                    "domains" to listOf("domain:ir", "geosite:category-ir"),
-                    "skipFallback" to true,
-                    "tag" to "domestic-dns",
-                ),
-            )
-        } else if (includeGeoRules && settings.bypassChina) {
-            servers.add(
-                mapObj(
-                    "address" to direct,
-                    "domains" to listOf("geosite:cn"),
-                    "skipFallback" to true,
-                    "tag" to "domestic-dns",
-                ),
-            )
-        }
-
-        val queryStrategy = when {
-            !settings.ipv6 || settings.dnsStrategy == "ipv4_only" -> "UseIPv4"
-            settings.dnsStrategy == "ipv6_only" -> "UseIPv6"
-            else -> "UseIP"
-        }
-
-        return mapObj(
-            "hosts" to dnsHosts,
-            "servers" to servers,
-            "queryStrategy" to queryStrategy,
-            "tag" to "dns-module",
-        )
-    }
-
-    // --------------------------------------------------------------- Routing
-
-    private fun buildRouting(
+    /**
+     * Exact port of `v2rayNG 2.3.10` `CoreConfigManager.buildV2raySpeedtestConfig` + `postProcessForSpeedtest`:
+     *  - Builds outbound via `buildOutboundWithGlobalSettings`
+     *  - Does NOT call `resolveOutboundDomainsToHosts` (because `MeasureOutboundDelay` strips `dns`)
+     *  - Clears `inbounds`, `routing.rules`, `dns`, `fakedns`, `stats`, `policy`, and `mux`.
+     */
+    private fun buildV2raySpeedtestConfig(
         profile: Profile,
         settings: AppSettings,
-        includeGeoRules: Boolean,
-    ): Map<String, Any?> {
-        val rules = mutableListOf<Map<String, Any?>>()
+    ): String {
+        val v2rayConfig = initV2rayConfig(settings)
+        v2rayConfig.remarks = profile.displayName
+        v2rayConfig.log.loglevel = settings.logLevel
 
-        // 1. Hijack port 53 on local inbounds to Xray's internal dns-out handler
-        // (Matches v2rayNG configureLocalDns / configureRootModeDns so DNS works over DoH/TCP)
-        val activeInboundTags = if (settings.useHevTun) listOf("socks") else listOf("tun", "socks")
-        rules.add(
-            mapObj(
-                "type" to "field",
-                "inboundTag" to activeInboundTags,
-                "port" to "53",
-                "outboundTag" to "dns-out",
-            ),
+        val proxyOutbound = buildOutboundWithGlobalSettings(profile, settings)
+        v2rayConfig.outbounds.add(0, proxyOutbound)
+
+        // postProcessForSpeedtest
+        v2rayConfig.inbounds.clear()
+        v2rayConfig.routing.domainStrategy = "AsIs"
+        v2rayConfig.routing.rules.clear()
+        v2rayConfig.dns = null
+        v2rayConfig.fakedns = null
+        v2rayConfig.stats = null
+        v2rayConfig.policy = null
+        v2rayConfig.outbounds.forEach { outbound ->
+            outbound.mux = null
+        }
+
+        return JsonUtil.toJsonPretty(v2rayConfig) ?: "{}"
+    }
+
+    // --------------------------------------------------- buildV2rayCustomConfig
+
+    /**
+     * Exact port of `v2rayNG 2.3.10` `CoreConfigManager.buildV2rayCustomConfig`:
+     * Preserves the Custom JSON's original `inbounds` (e.g. BPB Panel's `mixed-in` on port 10808
+     * and `dns-in`), `outbounds`, `finalmask`, `echConfigList`, `dns`, and `routing` when
+     * `useHevTun == true`, only injecting `stats` and `policy` for traffic counters.
+     */
+    private fun buildV2rayCustomConfig(
+        profile: Profile,
+        settings: AppSettings,
+    ): String {
+        val raw = profile.customConfig.trim()
+        val json = JsonUtil.parseString(raw) ?: return raw
+
+        // If the user pasted a single outbound object instead of a full config, wrap it
+        if (!json.has("outbounds") && json.has("protocol") && json.has("settings")) {
+            val outboundBean = JsonUtil.fromJsonSafe(raw, V2rayConfig.OutboundBean::class.java)
+            if (outboundBean != null) {
+                outboundBean.tag = AppConfig.TAG_PROXY
+                val v2rayConfig = initV2rayConfig(settings)
+                v2rayConfig.remarks = profile.displayName
+                v2rayConfig.outbounds.add(0, outboundBean)
+                configureRouting(profile, settings, v2rayConfig, includeGeoRules = true)
+                configureDns(settings, v2rayConfig, includeGeoRules = true)
+                return JsonUtil.toJsonPretty(v2rayConfig) ?: raw
+            }
+        }
+
+        if (!json.has("stats")) {
+            json.add("stats", JsonObject())
+        }
+        if (!json.has("policy")) {
+            val policyObj = JsonObject()
+            val systemObj = JsonObject()
+            systemObj.addProperty("statsOutboundUplink", true)
+            systemObj.addProperty("statsOutboundDownlink", true)
+            policyObj.add("system", systemObj)
+            json.add("policy", policyObj)
+        }
+
+        // When using hev-socks5-tunnel (!needTun()), return the custom JSON with its original inbounds/routing intact
+        if (settings.useHevTun) {
+            return JsonUtil.toJsonPretty(json) ?: raw
+        }
+
+        // Native TUN mode: inject "tun" inbound if missing
+        val inbounds = json.getAsJsonArray("inbounds") ?: JsonArray().also { json.add("inbounds", it) }
+        val hasTun = inbounds.any {
+            it.isJsonObject && it.asJsonObject.get("tag")?.asString == "tun"
+        }
+        if (!hasTun) {
+            val tunInbound = JsonObject().apply {
+                addProperty("tag", "tun")
+                addProperty("port", 0)
+                addProperty("protocol", "tun")
+                add("settings", JsonObject().apply {
+                    addProperty("name", "xray0")
+                    addProperty("MTU", settings.mtu)
+                    addProperty("userLevel", 8)
+                })
+                add("sniffing", JsonObject().apply {
+                    addProperty("enabled", true)
+                    add("destOverride", JsonArray().apply {
+                        add(JsonPrimitive("http"))
+                        add(JsonPrimitive("tls"))
+                        add(JsonPrimitive("quic"))
+                    })
+                })
+            }
+            inbounds.add(tunInbound)
+        }
+
+        return JsonUtil.toJsonPretty(json) ?: raw
+    }
+
+    // ------------------------------------------ CoreOutboundBuilder (v2rayNG 2.3.10)
+
+    private fun buildOutboundWithGlobalSettings(
+        p: Profile,
+        settings: AppSettings,
+    ): V2rayConfig.OutboundBean {
+        val outbound = buildOutbound(p, settings)
+        updateOutboundWithGlobalSettings(p, settings, outbound)
+        return outbound
+    }
+
+    private fun buildOutbound(
+        p: Profile,
+        settings: AppSettings,
+    ): V2rayConfig.OutboundBean {
+        val serverHost = p.server.trim()
+        return when (p.protocol) {
+            Protocol.VLESS -> {
+                val outbound = V2rayConfig.OutboundBean(
+                    tag = AppConfig.TAG_PROXY,
+                    protocol = "vless",
+                    settings = OutSettingsBean(
+                        address = serverHost,
+                        port = p.serverPort,
+                        id = p.uuid.trim(),
+                        encryption = p.encryption.ifBlank { "none" },
+                        flow = p.flow.takeIf { it.isNotBlank() },
+                        level = AppConfig.DEFAULT_LEVEL,
+                    ),
+                    streamSettings = StreamSettingsBean(),
+                    mux = V2rayConfig.OutboundBean.MuxBean(false),
+                )
+                populateTransportAndTls(p, outbound)
+                outbound
+            }
+
+            Protocol.VMESS -> {
+                val outbound = V2rayConfig.OutboundBean(
+                    tag = AppConfig.TAG_PROXY,
+                    protocol = "vmess",
+                    settings = OutSettingsBean(
+                        address = serverHost,
+                        port = p.serverPort,
+                        id = p.uuid.trim(),
+                        security = p.security.ifBlank { AppConfig.DEFAULT_SECURITY },
+                        level = AppConfig.DEFAULT_LEVEL,
+                    ),
+                    streamSettings = StreamSettingsBean(),
+                    mux = V2rayConfig.OutboundBean.MuxBean(false),
+                )
+                populateTransportAndTls(p, outbound)
+                outbound
+            }
+
+            Protocol.TROJAN -> {
+                val outbound = V2rayConfig.OutboundBean(
+                    tag = AppConfig.TAG_PROXY,
+                    protocol = "trojan",
+                    settings = OutSettingsBean(
+                        address = serverHost,
+                        port = p.serverPort,
+                        password = p.password,
+                        flow = p.flow.takeIf { it.isNotBlank() },
+                        level = AppConfig.DEFAULT_LEVEL,
+                    ),
+                    streamSettings = StreamSettingsBean(),
+                    mux = V2rayConfig.OutboundBean.MuxBean(false),
+                )
+                populateTransportAndTls(p, outbound)
+                outbound
+            }
+
+            Protocol.SHADOWSOCKS -> {
+                val outbound = V2rayConfig.OutboundBean(
+                    tag = AppConfig.TAG_PROXY,
+                    protocol = "shadowsocks",
+                    settings = OutSettingsBean(
+                        address = serverHost,
+                        port = p.serverPort,
+                        password = p.password,
+                        method = p.method.ifBlank { "chacha20-ietf-poly1305" },
+                        level = AppConfig.DEFAULT_LEVEL,
+                    ),
+                    streamSettings = StreamSettingsBean(),
+                    mux = V2rayConfig.OutboundBean.MuxBean(false),
+                )
+                populateTransportAndTls(p, outbound)
+                outbound
+            }
+
+            Protocol.SOCKS -> {
+                V2rayConfig.OutboundBean(
+                    tag = AppConfig.TAG_PROXY,
+                    protocol = "socks",
+                    settings = OutSettingsBean(
+                        address = serverHost,
+                        port = p.serverPort,
+                        user = p.username.takeIf { it.isNotBlank() },
+                        pass = p.password.takeIf { it.isNotBlank() },
+                        level = AppConfig.DEFAULT_LEVEL,
+                    ),
+                    streamSettings = StreamSettingsBean(),
+                    mux = V2rayConfig.OutboundBean.MuxBean(false),
+                )
+            }
+
+            Protocol.HTTP -> {
+                V2rayConfig.OutboundBean(
+                    tag = AppConfig.TAG_PROXY,
+                    protocol = "http",
+                    settings = OutSettingsBean(
+                        address = serverHost,
+                        port = p.serverPort,
+                        user = p.username.takeIf { it.isNotBlank() },
+                        pass = p.password.takeIf { it.isNotBlank() },
+                    ),
+                    streamSettings = null,
+                    mux = null,
+                )
+            }
+
+            Protocol.HYSTERIA2, Protocol.TUIC -> {
+                val streamSettings = StreamSettingsBean(
+                    network = NetworkType.HYSTERIA.type,
+                    hysteriaSettings = StreamSettingsBean.HysteriaSettingsBean(
+                        version = 2,
+                        auth = p.password,
+                    ),
+                )
+                val sni = populateTransportSettings(p, streamSettings)
+                populateTlsSettings(
+                    p = p,
+                    streamSettings = streamSettings,
+                    sni = sni,
+                    forceTls = true,
+                    defaultAlpn = "h3",
+                )
+
+                val quicParams = StreamSettingsBean.FinalMaskBean.QuicParamsBean()
+                if (p.upMbps > 0) quicParams.brutalUp = "${p.upMbps} mbps"
+                if (p.downMbps > 0) quicParams.brutalDown = "${p.downMbps} mbps"
+                if (!quicParams.brutalUp.isNullOrEmpty() && !quicParams.brutalDown.isNullOrEmpty()) {
+                    quicParams.congestion = "brutal"
+                }
+                if (p.portHopping.isNotBlank()) {
+                    quicParams.udpHop = StreamSettingsBean.FinalMaskBean.QuicParamsBean.UdpHopBean(
+                        ports = p.portHopping,
+                        interval = p.portHoppingInterval.ifBlank { "30" },
+                    )
+                }
+
+                val hasQuicParams = quicParams.congestion != null ||
+                    quicParams.brutalUp != null ||
+                    quicParams.brutalDown != null ||
+                    quicParams.udpHop != null
+                val udpMasks = if (p.obfsPassword.isNotBlank()) {
+                    listOf(
+                        StreamSettingsBean.FinalMaskBean.MaskBean(
+                            type = "salamander",
+                            settings = StreamSettingsBean.FinalMaskBean.MaskBean.MaskSettingsBean(
+                                password = p.obfsPassword,
+                            ),
+                        ),
+                    )
+                } else null
+
+                if (hasQuicParams || udpMasks != null) {
+                    streamSettings.finalmask = StreamSettingsBean.FinalMaskBean(
+                        udp = udpMasks,
+                        quicParams = if (hasQuicParams) quicParams else null,
+                    )
+                }
+
+                V2rayConfig.OutboundBean(
+                    tag = AppConfig.TAG_PROXY,
+                    protocol = "hysteria",
+                    settings = OutSettingsBean(
+                        address = serverHost,
+                        port = p.serverPort,
+                        version = 2,
+                    ),
+                    streamSettings = streamSettings,
+                    mux = V2rayConfig.OutboundBean.MuxBean(false),
+                )
+            }
+
+            Protocol.WIREGUARD -> {
+                val endpointHost = if (serverHost.contains(":") && !serverHost.startsWith("[")) {
+                    "[$serverHost]"
+                } else {
+                    serverHost
+                }
+                val addrs = p.localAddresses.ifEmpty { listOf(AppConfig.WIREGUARD_LOCAL_ADDRESS_V4) }
+                V2rayConfig.OutboundBean(
+                    tag = AppConfig.TAG_PROXY,
+                    protocol = "wireguard",
+                    settings = OutSettingsBean(
+                        secretKey = p.privateKey,
+                        address = addrs,
+                        peers = listOf(
+                            OutSettingsBean.WireGuardBean(
+                                publicKey = p.peerPublicKey,
+                                preSharedKey = p.preSharedKey.takeIf { it.isNotBlank() },
+                                endpoint = "$endpointHost:${p.serverPort}",
+                            ),
+                        ),
+                        mtu = if (p.mtu in 1280..1500) p.mtu else 1420,
+                        reserved = p.reserved.takeIf { it.isNotEmpty() },
+                    ),
+                    streamSettings = null,
+                    mux = null,
+                )
+            }
+
+            else -> V2rayConfig.OutboundBean(
+                tag = AppConfig.TAG_PROXY,
+                protocol = "freedom",
+                settings = OutSettingsBean(),
+                streamSettings = null,
+                mux = null,
+            )
+        }
+    }
+
+    private fun populateTransportAndTls(
+        p: Profile,
+        outbound: V2rayConfig.OutboundBean,
+    ) {
+        val stream = outbound.streamSettings ?: return
+        val sni = populateTransportSettings(p, stream)
+        populateTlsSettings(p, stream, sni)
+        if (p.finalMask.isNotBlank()) {
+            stream.finalmask = JsonUtil.parseString(p.finalMask)
+        }
+    }
+
+    private fun populateTransportSettings(
+        p: Profile,
+        streamSettings: StreamSettingsBean,
+    ): String? {
+        val transport = p.transport.type.ifBlank { AppConfig.DEFAULT_NETWORK }.lowercase()
+        var sni: String? = null
+        streamSettings.network = when (transport) {
+            "splithttp" -> NetworkType.XHTTP.type
+            "http", "h2" -> NetworkType.XHTTP.type
+            else -> transport
+        }
+
+        when (streamSettings.network) {
+            NetworkType.TCP.type -> {
+                val tcpSetting = StreamSettingsBean.TcpSettingsBean()
+                if (p.transport.headerType.equals(AppConfig.HEADER_TYPE_HTTP, true)) {
+                    tcpSetting.header.type = AppConfig.HEADER_TYPE_HTTP
+                    val hosts = p.transport.host.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    val paths = p.transport.path.split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("/") }
+                    sni = hosts.firstOrNull()
+                    tcpSetting.header.request = StreamSettingsBean.TcpSettingsBean.HeaderBean.RequestBean(
+                        path = paths,
+                        headers = StreamSettingsBean.TcpSettingsBean.HeaderBean.RequestBean.HeadersBean(
+                            Host = hosts.takeIf { it.isNotEmpty() },
+                            userAgent = listOf("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36"),
+                            acceptEncoding = listOf("gzip, deflate"),
+                            Connection = listOf("keep-alive"),
+                            Pragma = "no-cache",
+                        ),
+                        version = "1.1",
+                        method = "GET",
+                    )
+                } else {
+                    tcpSetting.header.type = "none"
+                    sni = p.transport.host
+                }
+                streamSettings.tcpSettings = tcpSetting
+            }
+
+            NetworkType.KCP.type -> {
+                streamSettings.kcpSettings = StreamSettingsBean.KcpSettingsBean()
+            }
+
+            NetworkType.WS.type -> {
+                val wsPath = ShareLinkParser.buildWsPathWithEd(p.transport)
+                sni = p.transport.host
+                streamSettings.wsSettings = StreamSettingsBean.WsSettingsBean(
+                    host = p.transport.host,
+                    path = wsPath,
+                    headers = p.transport.headers.takeIf { it.isNotEmpty() },
+                )
+            }
+
+            NetworkType.HTTP_UPGRADE.type -> {
+                val huPath = ShareLinkParser.buildWsPathWithEd(p.transport)
+                sni = p.transport.host
+                streamSettings.httpupgradeSettings = StreamSettingsBean.HttpupgradeSettingsBean(
+                    host = p.transport.host,
+                    path = huPath,
+                )
+            }
+
+            NetworkType.XHTTP.type -> {
+                sni = p.transport.host
+                streamSettings.xhttpSettings = StreamSettingsBean.XhttpSettingsBean(
+                    host = p.transport.host,
+                    path = p.transport.path.ifBlank { "/" },
+                    mode = p.transport.xhttpMode.ifBlank { "auto" },
+                    extra = JsonUtil.parseString(p.transport.xhttpExtra.takeIf { it.isNotBlank() }),
+                )
+            }
+
+            NetworkType.GRPC.type -> {
+                val grpcMode = p.transport.grpcMode
+                sni = p.transport.authority.ifBlank { p.transport.host }
+                streamSettings.grpcSettings = StreamSettingsBean.GrpcSettingsBean(
+                    serviceName = p.transport.serviceName.ifBlank { p.transport.path },
+                    authority = sni?.takeIf { it.isNotBlank() },
+                    multiMode = grpcMode.equals("multi", true),
+                    idle_timeout = 60,
+                    health_check_timeout = 20,
+                )
+            }
+        }
+        return sni
+    }
+
+    private fun populateTlsSettings(
+        p: Profile,
+        streamSettings: StreamSettingsBean,
+        sni: String?,
+        forceTls: Boolean = false,
+        defaultAlpn: String? = null,
+    ) {
+        val isReality = p.tls.reality
+        val isTls = p.tls.enabled || forceTls
+        val streamSecurity = when {
+            isReality -> AppConfig.REALITY
+            isTls -> AppConfig.TLS
+            else -> ""
+        }
+        streamSettings.security = streamSecurity.ifBlank { null }
+        if (streamSettings.security == null) return
+
+        val sniExt = when {
+            p.tls.serverName.isNotBlank() -> p.tls.serverName
+            !sni.isNullOrBlank() && !isPureIpAddress(sni) -> sni
+            p.server.isNotBlank() && !isPureIpAddress(p.server) -> p.server
+            else -> sni
+        }
+
+        val alpnList = when {
+            p.tls.alpn.isNotEmpty() -> p.tls.alpn
+            !defaultAlpn.isNullOrBlank() -> listOf(defaultAlpn)
+            else -> null
+        }
+
+        val tlsSetting = StreamSettingsBean.TlsSettingsBean(
+            allowInsecure = p.tls.insecure && p.tls.pinnedCA256.isBlank(),
+            serverName = sniExt?.takeIf { it.isNotBlank() },
+            fingerprint = p.tls.utlsFingerprint.takeIf { it.isNotBlank() }
+                ?: if (isReality) "chrome" else null,
+            alpn = alpnList,
+            echConfigList = p.tls.echConfigList.takeIf { it.isNotBlank() },
+            pinnedPeerCertSha256 = p.tls.pinnedCA256.takeIf { it.isNotBlank() },
+            verifyPeerCertByName = p.tls.verifyPeerCertByName.takeIf { it.isNotBlank() },
+            publicKey = p.tls.realityPublicKey.takeIf { it.isNotBlank() },
+            shortId = p.tls.realityShortId.takeIf { it.isNotBlank() },
+            spiderX = p.tls.realitySpiderX.takeIf { it.isNotBlank() },
+            mldsa65Verify = p.tls.mldsa65Verify.takeIf { it.isNotBlank() },
         )
 
-        // 2. Block UDP 443 (QUIC) on TCP/WS/gRPC/XHTTP outbounds (matches v2rayNG custom_routing_global / white_iran)
+        if (streamSettings.security == AppConfig.TLS) {
+            streamSettings.tlsSettings = tlsSetting
+            streamSettings.realitySettings = null
+        } else if (streamSettings.security == AppConfig.REALITY) {
+            streamSettings.tlsSettings = null
+            streamSettings.realitySettings = tlsSetting
+        }
+    }
+
+    private fun updateOutboundWithGlobalSettings(
+        p: Profile,
+        settings: AppSettings,
+        outbound: V2rayConfig.OutboundBean,
+    ) {
+        updateOutboundFragment(settings, outbound)
+
+        val allowMux = settings.tcpMux &&
+            p.protocol in setOf(Protocol.VLESS, Protocol.VMESS) &&
+            outbound.streamSettings?.network != NetworkType.XHTTP.type
+        if (allowMux) {
+            val concurrency = if (p.protocol == Protocol.VLESS && p.flow.isNotBlank()) -1 else settings.muxConcurrency
+            outbound.mux?.enabled = true
+            outbound.mux?.concurrency = concurrency
+            outbound.mux?.xudpConcurrency = settings.muxXudpConcurrency
+            outbound.mux?.xudpProxyUDP443 = settings.muxXudpQuic
+        } else {
+            outbound.mux?.enabled = false
+            outbound.mux?.concurrency = -1
+        }
+
+        if (outbound.protocol.equals("wireguard", true)) {
+            val localTunAddr = if (outbound.settings?.address == null) {
+                listOf(AppConfig.WIREGUARD_LOCAL_ADDRESS_V4)
+            } else {
+                outbound.settings?.address as List<*>
+            }
+            if (!settings.ipv6) {
+                outbound.settings?.address = listOf(localTunAddr.first())
+            }
+        }
+    }
+
+    private fun updateOutboundFragment(
+        settings: AppSettings,
+        outbound: V2rayConfig.OutboundBean,
+    ): Boolean {
+        if (outbound.streamSettings?.security != AppConfig.TLS &&
+            outbound.streamSettings?.security != AppConfig.REALITY
+        ) {
+            return false
+        }
+        if (outbound.streamSettings?.finalmask != null) {
+            return false
+        }
+
+        val sniOrHost = (outbound.streamSettings?.tlsSettings?.serverName
+            ?: outbound.getServerAddress()
+            ?: "").lowercase()
+        val isCloudflareWorkerDomain = (sniOrHost.endsWith(".workers.dev") || sniOrHost.endsWith(".pages.dev")) &&
+            outbound.streamSettings?.tlsSettings?.echConfigList.isNullOrBlank()
+
+        if (!settings.fragmentEnabled && !isCloudflareWorkerDomain) {
+            return false
+        }
+
+        if (!settings.fragmentEnabled && isCloudflareWorkerDomain) {
+            // Matches BPB-Worker-Panel default TLS fragment for *.workers.dev / *.pages.dev
+            val tcpMask = StreamSettingsBean.FinalMaskBean.MaskBean(
+                type = "fragment",
+                settings = StreamSettingsBean.FinalMaskBean.MaskBean.MaskSettingsBean(
+                    packets = "tlshello",
+                    length = "100-200",
+                    delay = "1-2",
+                ),
+            )
+            outbound.streamSettings?.finalmask = StreamSettingsBean.FinalMaskBean(
+                tcp = listOf(tcpMask),
+            )
+            return true
+        }
+
+        var packets = settings.fragmentPackets.ifBlank { "tlshello" }
+        if (outbound.streamSettings?.security == AppConfig.REALITY && packets == "tlshello") {
+            packets = "1-3"
+        } else if (outbound.streamSettings?.security == AppConfig.TLS && packets != "tlshello") {
+            packets = "tlshello"
+        }
+
+        val tcpMask = StreamSettingsBean.FinalMaskBean.MaskBean(
+            type = "fragment",
+            settings = StreamSettingsBean.FinalMaskBean.MaskBean.MaskSettingsBean(
+                packets = packets,
+                length = settings.fragmentLength.ifBlank { "50-100" },
+                delay = settings.fragmentInterval.ifBlank { "10-20" },
+            ),
+        )
+        val udpMask = StreamSettingsBean.FinalMaskBean.MaskBean(
+            type = "noise",
+            settings = StreamSettingsBean.FinalMaskBean.MaskBean.MaskSettingsBean(
+                noise = listOf(
+                    StreamSettingsBean.FinalMaskBean.MaskBean.MaskSettingsBean.NoiseMaskBean(
+                        rand = "10-20",
+                        delay = "10-16",
+                    ),
+                ),
+            ),
+        )
+        outbound.streamSettings?.finalmask = StreamSettingsBean.FinalMaskBean(
+            tcp = listOf(tcpMask),
+            udp = listOf(udpMask),
+        )
+        return true
+    }
+
+    // --------------------------------------------------- Routing (v2rayNG 2.3.10)
+
+    private fun configureRouting(
+        profile: Profile,
+        settings: AppSettings,
+        v2rayConfig: V2rayConfig,
+        includeGeoRules: Boolean,
+    ) {
+        v2rayConfig.routing.domainStrategy = settings.domainStrategy.ifBlank { "AsIs" }
+        val rules = v2rayConfig.routing.rules
+
+        // 1. Block UDP 443 on non-UDP protocols (matches v2rayNG custom_routing_global / custom_routing_white_iran)
         val isUdpNativeProtocol = profile.protocol in setOf(Protocol.HYSTERIA2, Protocol.TUIC, Protocol.WIREGUARD)
         if (!isUdpNativeProtocol) {
             rules.add(
-                mapObj(
-                    "type" to "field",
-                    "port" to "443",
-                    "network" to "udp",
-                    "outboundTag" to "block",
+                V2rayConfig.RoutingBean.RulesBean(
+                    port = "443",
+                    network = "udp",
+                    outboundTag = AppConfig.TAG_BLOCKED,
                 ),
             )
         }
 
-        // 3. Optional ad blocking
+        // 2. Optional Ad Blocking
         if (includeGeoRules && settings.blockAds) {
             rules.add(
-                mapObj(
-                    "type" to "field",
-                    "domain" to listOf("geosite:category-ads-all"),
-                    "outboundTag" to "block",
+                V2rayConfig.RoutingBean.RulesBean(
+                    domain = listOf("geosite:category-ads-all"),
+                    outboundTag = AppConfig.TAG_BLOCKED,
                 ),
             )
         }
 
-        // 4. Bypass private LAN IP & domains
+        // 3. Bypass LAN IP & domains
         if (settings.bypassLan) {
             if (includeGeoRules) {
                 rules.add(
-                    mapObj(
-                        "type" to "field",
-                        "ip" to listOf("ext:geoip-only-cn-private.dat:private"),
-                        "outboundTag" to "direct",
+                    V2rayConfig.RoutingBean.RulesBean(
+                        ip = listOf("ext:geoip-only-cn-private.dat:private"),
+                        outboundTag = AppConfig.TAG_DIRECT,
                     ),
                 )
                 rules.add(
-                    mapObj(
-                        "type" to "field",
-                        "domain" to listOf("geosite:private"),
-                        "outboundTag" to "direct",
+                    V2rayConfig.RoutingBean.RulesBean(
+                        domain = listOf("geosite:private"),
+                        outboundTag = AppConfig.TAG_DIRECT,
                     ),
                 )
             } else {
                 rules.add(
-                    mapObj(
-                        "type" to "field",
-                        "ip" to listOf(
+                    V2rayConfig.RoutingBean.RulesBean(
+                        ip = listOf(
                             "10.0.0.0/8",
                             "127.0.0.0/8",
                             "172.16.0.0/12",
                             "192.168.0.0/16",
                             "169.254.0.0/16",
                         ),
-                        "outboundTag" to "direct",
+                        outboundTag = AppConfig.TAG_DIRECT,
                     ),
                 )
             }
         }
 
-        // 5. Regional routing presets
+        // 4. Regional routing presets (matches v2rayNG custom_routing_white_iran / custom_routing_white / custom_routing_global)
         when (settings.routeMode) {
             "white_iran" -> {
                 if (includeGeoRules) {
-                    // Exact v2rayNG custom_routing_white_iran rules
                     rules.add(
-                        mapObj(
-                            "type" to "field",
-                            "domain" to listOf("domain:ir", "geosite:category-ir"),
-                            "outboundTag" to "direct",
+                        V2rayConfig.RoutingBean.RulesBean(
+                            domain = listOf("domain:ir", "geosite:category-ir"),
+                            outboundTag = AppConfig.TAG_DIRECT,
                         ),
                     )
                     rules.add(
-                        mapObj(
-                            "type" to "field",
-                            "ip" to listOf("geoip:ir"),
-                            "outboundTag" to "direct",
+                        V2rayConfig.RoutingBean.RulesBean(
+                            ip = listOf("geoip:ir"),
+                            outboundTag = AppConfig.TAG_DIRECT,
                         ),
                     )
                 } else {
                     rules.add(
-                        mapObj(
-                            "type" to "field",
-                            "domain" to listOf("domain:ir"),
-                            "outboundTag" to "direct",
+                        V2rayConfig.RoutingBean.RulesBean(
+                            domain = listOf("domain:ir"),
+                            outboundTag = AppConfig.TAG_DIRECT,
                         ),
                     )
                 }
@@ -379,17 +905,15 @@ object ConfigBuilder {
             "rule" -> {
                 if (includeGeoRules && settings.bypassChina) {
                     rules.add(
-                        mapObj(
-                            "type" to "field",
-                            "ip" to listOf("ext:geoip-only-cn-private.dat:cn"),
-                            "outboundTag" to "direct",
+                        V2rayConfig.RoutingBean.RulesBean(
+                            ip = listOf("ext:geoip-only-cn-private.dat:cn"),
+                            outboundTag = AppConfig.TAG_DIRECT,
                         ),
                     )
                     rules.add(
-                        mapObj(
-                            "type" to "field",
-                            "domain" to listOf("geosite:cn"),
-                            "outboundTag" to "direct",
+                        V2rayConfig.RoutingBean.RulesBean(
+                            domain = listOf("geosite:cn"),
+                            outboundTag = AppConfig.TAG_DIRECT,
                         ),
                     )
                 }
@@ -397,517 +921,187 @@ object ConfigBuilder {
 
             "direct" -> {
                 rules.add(
-                    mapObj(
-                        "type" to "field",
-                        "port" to "0-65535",
-                        "outboundTag" to "direct",
+                    V2rayConfig.RoutingBean.RulesBean(
+                        port = "0-65535",
+                        outboundTag = AppConfig.TAG_DIRECT,
+                    ),
+                )
+            }
+
+            else -> {
+                // "global": matches custom_routing_global
+                rules.add(
+                    V2rayConfig.RoutingBean.RulesBean(
+                        port = "0-65535",
+                        outboundTag = AppConfig.TAG_PROXY,
                     ),
                 )
             }
         }
+    }
 
-        // 6. DNS module routing (matches v2rayNG configureDns)
-        if (includeGeoRules && (settings.routeMode == "white_iran" || settings.bypassChina)) {
-            rules.add(
-                mapObj(
-                    "type" to "field",
-                    "inboundTag" to listOf("domestic-dns"),
-                    "outboundTag" to "direct",
+    // ------------------------------------------------------- DNS (v2rayNG 2.3.10)
+
+    private fun configureDns(
+        settings: AppSettings,
+        v2rayConfig: V2rayConfig,
+        includeGeoRules: Boolean,
+    ) {
+        val hosts = linkedMapOf<String, Any>(
+            "domain:googleapis.cn" to "googleapis.com",
+            "dns.alidns.com" to arrayListOf("223.5.5.5", "223.6.6.6", "2400:3200::1", "2400:3200:baba::1"),
+            "one.one.one.one" to arrayListOf("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"),
+            "1dot1dot1dot1.cloudflare-dns.com" to arrayListOf("1.1.1.1", "1.0.0.1", "2606:4700:4700::1111", "2606:4700:4700::1001"),
+            "dns.cloudflare.com" to arrayListOf("162.159.61.8", "172.64.41.8", "2a06:98c1:52::8", "2803:f800:53::8"),
+            "cloudflare-dns.com" to arrayListOf("104.16.248.249", "104.16.249.249", "2606:4700::6810:f8f9", "2606:4700::6810:f9f9"),
+            "dns.google" to arrayListOf("8.8.8.8", "8.8.4.4", "2001:4860:4860::8888", "2001:4860:4860::8844"),
+            "dns.quad9.net" to arrayListOf("9.9.9.9", "149.112.112.112", "2620:fe::fe", "2620:fe::9"),
+        )
+
+        val servers = ArrayList<Any>()
+        if (settings.fakeDns) {
+            servers.add("fakedns")
+        }
+
+        val remoteDns = settings.remoteDns.trim().ifBlank { AppConfig. DELAY_TEST_URL }.let {
+            if (it.isBlank()) "https://cloudflare-dns.com/dns-query" else settings.remoteDns.trim().ifBlank { "https://cloudflare-dns.com/dns-query" }
+        }
+        servers.add(remoteDns)
+
+        val directDns = settings.directDns.trim().ifBlank { "223.5.5.5" }
+        val domainDirectList = buildList {
+            if (includeGeoRules && settings.routeMode == "white_iran") {
+                add("domain:ir")
+                add("geosite:category-ir")
+            } else if (includeGeoRules && settings.bypassChina) {
+                add("geosite:cn")
+            }
+        }
+        if (domainDirectList.isNotEmpty()) {
+            servers.add(
+                V2rayConfig.DnsBean.ServersBean(
+                    address = directDns,
+                    domains = domainDirectList,
+                    skipFallback = true,
+                    tag = AppConfig.TAG_DOMESTIC_DNS,
                 ),
             )
         }
-        rules.add(
-            mapObj(
-                "type" to "field",
-                "inboundTag" to listOf("dns-module"),
-                "outboundTag" to "proxy",
+
+        v2rayConfig.dns = V2rayConfig.DnsBean(
+            servers = servers,
+            hosts = hosts,
+            tag = AppConfig.TAG_DNS,
+        )
+
+        // DNS routing rules at index 0 (exact port of v2rayNG CoreConfigManager.configureDns)
+        if (domainDirectList.isNotEmpty()) {
+            v2rayConfig.routing.rules.add(
+                0,
+                V2rayConfig.RoutingBean.RulesBean(
+                    inboundTag = listOf(AppConfig.TAG_DOMESTIC_DNS),
+                    outboundTag = AppConfig.TAG_DIRECT,
+                ),
+            )
+        }
+        v2rayConfig.routing.rules.add(
+            0,
+            V2rayConfig.RoutingBean.RulesBean(
+                inboundTag = listOf(AppConfig.TAG_DNS),
+                outboundTag = AppConfig.TAG_PROXY,
             ),
         )
+    }
 
-        // 7. Catch-all rule -> proxy (matches v2rayNG custom_routing_global)
-        rules.add(
-            mapObj(
-                "type" to "field",
-                "port" to "0-65535",
-                "outboundTag" to "proxy",
+    /**
+     * Exact port of `v2rayNG 2.3.10` `CoreConfigManager.configureLocalDns`:
+     * Only hijacks port 53 to `dns-out` when `localDnsEnabled == true` (false by default!).
+     */
+    private fun configureLocalDns(
+        settings: AppSettings,
+        v2rayConfig: V2rayConfig,
+    ) {
+        if (!settings.localDnsEnabled) {
+            return
+        }
+        if (v2rayConfig.outbounds.none { it.protocol == "dns" && it.tag == "dns-out" }) {
+            v2rayConfig.outbounds.add(
+                V2rayConfig.OutboundBean(
+                    protocol = "dns",
+                    tag = "dns-out",
+                    settings = null,
+                    streamSettings = null,
+                    mux = null,
+                ),
+            )
+        }
+        v2rayConfig.routing.rules.add(
+            0,
+            V2rayConfig.RoutingBean.RulesBean(
+                inboundTag = listOf("socks"),
+                outboundTag = "dns-out",
+                port = "53",
             ),
         )
+    }
 
-        return mapObj(
-            "domainStrategy" to settings.domainStrategy.ifBlank { "AsIs" },
-            "rules" to rules,
+    private fun configureRootModeDns(v2rayConfig: V2rayConfig) {
+        if (v2rayConfig.outbounds.none { it.protocol == "dns" && it.tag == "dns-out" }) {
+            v2rayConfig.outbounds.add(
+                V2rayConfig.OutboundBean(
+                    protocol = "dns",
+                    tag = "dns-out",
+                    settings = null,
+                    streamSettings = null,
+                    mux = null,
+                ),
+            )
+        }
+        v2rayConfig.routing.rules.add(
+            0,
+            V2rayConfig.RoutingBean.RulesBean(
+                inboundTag = listOf("tun"),
+                outboundTag = "dns-out",
+                port = "53",
+            ),
         )
     }
 
-    // -------------------------------------------------------------- Outbound
+    // ----------------------------- resolveOutboundDomainsToHosts (v2rayNG 2.3.10)
 
-    private fun buildOutbound(
-        p: Profile,
+    private fun resolveOutboundDomainsToHosts(
         settings: AppSettings,
-        dnsHosts: MutableMap<String, Any?>,
-        forSpeedtest: Boolean,
-    ): Map<String, Any?> {
-        if (p.protocol == Protocol.DIRECT) {
-            return mapObj("tag" to "proxy", "protocol" to "freedom")
-        }
+        v2rayConfig: V2rayConfig,
+    ) {
+        val proxyOutboundList = v2rayConfig.getAllProxyOutbound()
+        val dns = v2rayConfig.dns ?: return
+        val newHosts = dns.hosts?.toMutableMap() ?: mutableMapOf()
+        val preferIpv6 = settings.preferIpv6
 
-        // Pre-resolve server domain to IP(s) via Android system DNS (matching v2rayNG resolveOutboundDomainsToHosts)
-        val serverHost = p.server.trim()
-        var resolvedStrategy: String? = null
-        var happyEyeballs: Map<String, Any?>? = null
-        if (serverHost.isNotBlank() && !isPureIpAddress(serverHost) && settings.outboundDomainResolve != "asis") {
-            val resolvedIps = resolveDomainToIps(serverHost, preferIpv6 = settings.preferIpv6)
-            if (resolvedIps.isNotEmpty()) {
-                dnsHosts[serverHost] = if (resolvedIps.size == 1) resolvedIps.first() else resolvedIps
-                resolvedStrategy = "UseIP"
-                happyEyeballs = mapObj(
-                    "tryDelayMs" to 250,
-                    "interleave" to 2,
-                    "prioritizeIPv6" to settings.preferIpv6,
-                )
+        for (item in proxyOutboundList) {
+            val domain = item.getServerAddress()
+            if (domain.isNullOrBlank() || isPureIpAddress(domain)) continue
+
+            val resolvedIps = resolveDomainToIps(domain, preferIpv6)
+            if (resolvedIps.isEmpty()) continue
+
+            val sockopt = item.ensureSockopt()
+            sockopt.domainStrategy = "UseIP"
+            sockopt.happyEyeballs = StreamSettingsBean.HappyEyeballsBean(
+                tryDelayMs = 250,
+                prioritizeIPv6 = preferIpv6,
+                interleave = 2,
+                maxConcurrentTry = 4,
+            )
+            newHosts[domain] = if (resolvedIps.size == 1) {
+                resolvedIps.first()
             } else {
-                resolvedStrategy = if (settings.ipv6) "UseIP" else "UseIPv4"
+                resolvedIps
             }
         }
 
-        val protocolName = when (p.protocol) {
-            Protocol.VLESS -> "vless"
-            Protocol.VMESS -> "vmess"
-            Protocol.TROJAN -> "trojan"
-            Protocol.SHADOWSOCKS -> "shadowsocks"
-            Protocol.SOCKS -> "socks"
-            Protocol.HTTP -> "http"
-            Protocol.HYSTERIA2, Protocol.TUIC -> "hysteria"
-            Protocol.WIREGUARD -> "wireguard"
-            else -> "vless"
-        }
-
-        val outSettings: Map<String, Any?> = when (p.protocol) {
-            Protocol.VLESS -> mapObj(
-                "address" to serverHost,
-                "port" to p.serverPort,
-                "id" to p.uuid.trim(),
-                "encryption" to p.encryption.ifBlank { "none" },
-                "flow" to p.flow.takeIf { it.isNotBlank() },
-                "level" to 8,
-            )
-
-            Protocol.VMESS -> mapObj(
-                "address" to serverHost,
-                "port" to p.serverPort,
-                "id" to p.uuid.trim(),
-                "security" to p.security.ifBlank { "auto" },
-                "level" to 8,
-            )
-
-            Protocol.TROJAN -> mapObj(
-                "address" to serverHost,
-                "port" to p.serverPort,
-                "password" to p.password,
-                "flow" to p.flow.takeIf { it.isNotBlank() },
-                "level" to 8,
-            )
-
-            Protocol.SHADOWSOCKS -> mapObj(
-                "address" to serverHost,
-                "port" to p.serverPort,
-                "password" to p.password,
-                "method" to p.method.ifBlank { "chacha20-ietf-poly1305" },
-                "level" to 8,
-            )
-
-            Protocol.SOCKS, Protocol.HTTP -> mapObj(
-                "address" to serverHost,
-                "port" to p.serverPort,
-                "user" to p.username.takeIf { it.isNotBlank() },
-                "pass" to p.password.takeIf { it.isNotBlank() },
-                "level" to 8,
-            )
-
-            Protocol.HYSTERIA2, Protocol.TUIC -> mapObj(
-                "address" to serverHost,
-                "port" to p.serverPort,
-                "version" to 2,
-            )
-
-            Protocol.WIREGUARD -> {
-                val addrs = p.localAddresses.ifEmpty { listOf("172.16.0.2/32") }
-                    .let { list -> if (settings.ipv6) list else list.filter { !it.contains(":") }.ifEmpty { listOf("172.16.0.2/32") } }
-                val endpointHost = if (serverHost.contains(":") && !serverHost.startsWith("[")) "[$serverHost]" else serverHost
-                mapObj(
-                    "secretKey" to p.privateKey,
-                    "address" to addrs,
-                    "peers" to listOf(
-                        mapObj(
-                            "publicKey" to p.peerPublicKey,
-                            "preSharedKey" to p.preSharedKey.takeIf { it.isNotBlank() },
-                            "endpoint" to "$endpointHost:${p.serverPort}",
-                        ),
-                    ),
-                    "mtu" to if (p.mtu in 1280..1500) p.mtu else 1420,
-                    "reserved" to p.reserved.takeIf { it.isNotEmpty() },
-                )
-            }
-
-            else -> emptyMap()
-        }
-
-        val streamSettings = if (p.protocol == Protocol.WIREGUARD) {
-            if (resolvedStrategy != null) {
-                mapObj(
-                    "sockopt" to mapObj(
-                        "domainStrategy" to resolvedStrategy,
-                        "happyEyeballs" to happyEyeballs,
-                    ),
-                )
-            } else {
-                null
-            }
-        } else {
-            buildStreamSettings(p, settings, resolvedStrategy, happyEyeballs)
-        }
-
-        // In speedtest mode, v2rayNG sets mux = null
-        val muxObj = if (forSpeedtest) {
-            null
-        } else {
-            val allowMux = settings.tcpMux &&
-                p.protocol in setOf(Protocol.VLESS, Protocol.VMESS) &&
-                p.transport.type.lowercase() != "xhttp"
-            if (allowMux) {
-                val concurrency = if (p.protocol == Protocol.VLESS && p.flow.isNotBlank()) -1 else settings.muxConcurrency
-                mapObj(
-                    "enabled" to true,
-                    "concurrency" to concurrency,
-                    "xudpConcurrency" to settings.muxXudpConcurrency,
-                    "xudpProxyUDP443" to settings.muxXudpQuic,
-                )
-            } else {
-                mapObj(
-                    "enabled" to false,
-                    "concurrency" to -1,
-                )
-            }
-        }
-
-        return mapObj(
-            "tag" to "proxy",
-            "protocol" to protocolName,
-            "settings" to outSettings,
-            "streamSettings" to streamSettings,
-            "mux" to muxObj,
-        )
+        dns.hosts = newHosts
     }
-
-    private fun buildStreamSettings(
-        p: Profile,
-        settings: AppSettings,
-        resolvedStrategy: String?,
-        happyEyeballs: Map<String, Any?>?,
-    ): Map<String, Any?> {
-        val stream = linkedMapOf<String, Any?>()
-        val rawNet = if (p.protocol == Protocol.HYSTERIA2 || p.protocol == Protocol.TUIC) {
-            "hysteria"
-        } else {
-            p.transport.type.ifBlank { "tcp" }.lowercase()
-        }
-
-        val network = when (rawNet) {
-            "splithttp" -> "xhttp"
-            "http", "h2" -> "xhttp"
-            else -> rawNet
-        }
-        stream["network"] = network
-
-        var transportSni = ""
-        when (network) {
-            "tcp" -> {
-                if (p.transport.headerType.equals("http", ignoreCase = true)) {
-                    val hosts = p.transport.host.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-                    val paths = p.transport.path.split(",").map { it.trim() }.filter { it.isNotEmpty() }.ifEmpty { listOf("/") }
-                    transportSni = hosts.firstOrNull().orEmpty()
-                    stream["tcpSettings"] = mapObj(
-                        "header" to mapObj(
-                            "type" to "http",
-                            "request" to mapObj(
-                                "version" to "1.1",
-                                "method" to "GET",
-                                "path" to paths,
-                                "headers" to mapObj(
-                                    "Host" to hosts.takeIf { it.isNotEmpty() },
-                                    "User-Agent" to listOf("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36"),
-                                    "Accept-Encoding" to listOf("gzip, deflate"),
-                                    "Connection" to listOf("keep-alive"),
-                                    "Pragma" to "no-cache",
-                                ),
-                            ),
-                        ),
-                    )
-                } else {
-                    transportSni = p.transport.host
-                    stream["tcpSettings"] = mapObj(
-                        "header" to mapObj("type" to "none"),
-                    )
-                }
-            }
-
-            "ws" -> {
-                val wsHost = p.transport.host
-                val wsPath = ShareLinkParser.buildWsPathWithEd(p.transport)
-                transportSni = wsHost
-                stream["wsSettings"] = mapObj(
-                    "host" to wsHost,
-                    "path" to wsPath,
-                    "headers" to p.transport.headers.takeIf { it.isNotEmpty() },
-                )
-            }
-
-            "httpupgrade" -> {
-                val huHost = p.transport.host
-                val huPath = ShareLinkParser.buildWsPathWithEd(p.transport)
-                transportSni = huHost
-                stream["httpupgradeSettings"] = mapObj(
-                    "host" to huHost,
-                    "path" to huPath,
-                )
-            }
-
-            "xhttp" -> {
-                val xHost = p.transport.host
-                val xPath = p.transport.path.ifBlank { "/" }
-                transportSni = xHost
-                val extraParsed = if (p.transport.xhttpExtra.isNotBlank()) {
-                    runCatching { Json.parse(p.transport.xhttpExtra) }.getOrNull()
-                } else null
-                stream["xhttpSettings"] = mapObj(
-                    "host" to xHost,
-                    "path" to xPath,
-                    "mode" to p.transport.xhttpMode.ifBlank { "auto" },
-                    "extra" to extraParsed,
-                )
-            }
-
-            "grpc" -> {
-                transportSni = p.transport.authority.ifBlank { p.transport.host }
-                stream["grpcSettings"] = mapObj(
-                    "serviceName" to p.transport.serviceName.ifBlank { p.transport.path },
-                    "authority" to p.transport.authority.takeIf { it.isNotBlank() },
-                    "multiMode" to (p.transport.grpcMode == "multi"),
-                    "idle_timeout" to 60,
-                    "health_check_timeout" to 20,
-                )
-            }
-
-            "kcp" -> {
-                stream["kcpSettings"] = mapObj(
-                    "mtu" to 1350,
-                    "tti" to 50,
-                    "uplinkCapacity" to 12,
-                    "downlinkCapacity" to 100,
-                    "congestion" to false,
-                    "readBufferSize" to 1,
-                    "writeBufferSize" to 1,
-                )
-            }
-
-            "hysteria" -> {
-                stream["hysteriaSettings"] = mapObj(
-                    "version" to 2,
-                    "auth" to p.password,
-                )
-                val quicParams = linkedMapOf<String, Any?>()
-                if (p.upMbps > 0) quicParams["brutalUp"] = "${p.upMbps} mbps"
-                if (p.downMbps > 0) quicParams["brutalDown"] = "${p.downMbps} mbps"
-                if (quicParams.isNotEmpty()) quicParams["congestion"] = "brutal"
-                if (p.portHopping.isNotBlank()) {
-                    quicParams["udpHop"] = mapObj(
-                        "ports" to p.portHopping,
-                        "interval" to p.portHoppingInterval.ifBlank { "30" },
-                    )
-                }
-                val finalMask = linkedMapOf<String, Any?>()
-                if (quicParams.isNotEmpty()) finalMask["quicParams"] = quicParams
-                if (p.obfsPassword.isNotBlank()) {
-                    finalMask["udp"] = listOf(
-                        mapObj(
-                            "type" to "salamander",
-                            "settings" to mapObj("password" to p.obfsPassword),
-                        ),
-                    )
-                }
-                if (finalMask.isNotEmpty()) {
-                    stream["finalmask"] = finalMask
-                }
-            }
-        }
-
-        // TLS / REALITY settings
-        val isReality = p.tls.reality
-        val isTls = p.tls.enabled || p.protocol == Protocol.HYSTERIA2 || p.protocol == Protocol.TUIC
-        if (isReality) {
-            stream["security"] = "reality"
-            val sni = p.tls.serverName.ifBlank { transportSni.ifBlank { p.server } }
-            stream["realitySettings"] = mapObj(
-                "serverName" to sni,
-                "fingerprint" to p.tls.utlsFingerprint.ifBlank { "chrome" },
-                "publicKey" to p.tls.realityPublicKey,
-                "shortId" to p.tls.realityShortId,
-                "spiderX" to p.tls.realitySpiderX.ifBlank { "/" },
-            )
-        } else if (isTls) {
-            stream["security"] = "tls"
-            val sni = p.tls.serverName.ifBlank {
-                when {
-                    transportSni.isNotBlank() && !isPureIpAddress(transportSni) -> transportSni
-                    !isPureIpAddress(p.server) -> p.server
-                    else -> transportSni
-                }
-            }
-            val alpnList = if (p.protocol == Protocol.HYSTERIA2 || p.protocol == Protocol.TUIC) {
-                p.tls.alpn.ifEmpty { listOf("h3") }
-            } else {
-                p.tls.alpn.takeIf { it.isNotEmpty() }
-            }
-            stream["tlsSettings"] = mapObj(
-                "allowInsecure" to (p.tls.insecure && p.tls.pinnedCA256.isBlank()),
-                "serverName" to sni.takeIf { it.isNotBlank() },
-                "fingerprint" to p.tls.utlsFingerprint.takeIf { it.isNotBlank() },
-                "alpn" to alpnList,
-                "echConfigList" to p.tls.echConfigList.takeIf { it.isNotBlank() },
-                "pinnedPeerCertSha256" to p.tls.pinnedCA256.takeIf { it.isNotBlank() },
-            )
-        }
-
-        // Xray TLS Fragment & UDP Noise (`finalmask`) when enabled in Settings
-        if (settings.fragmentEnabled && (isTls || isReality) && stream["finalmask"] == null) {
-            val packets = if (isReality && settings.fragmentPackets == "tlshello") {
-                "1-3"
-            } else {
-                settings.fragmentPackets.ifBlank { "tlshello" }
-            }
-            stream["finalmask"] = mapObj(
-                "tcp" to listOf(
-                    mapObj(
-                        "type" to "fragment",
-                        "settings" to mapObj(
-                            "packets" to packets,
-                            "length" to settings.fragmentLength.ifBlank { "50-100" },
-                            "delay" to settings.fragmentInterval.ifBlank { "10-20" },
-                            "maxSplit" to settings.fragmentMaxSplit.ifBlank { "10" },
-                        ),
-                    ),
-                ),
-                "udp" to listOf(
-                    mapObj(
-                        "type" to "noise",
-                        "settings" to mapObj(
-                            "noise" to listOf(
-                                mapObj(
-                                    "rand" to "10-20",
-                                    "delay" to "10-16",
-                                ),
-                            ),
-                        ),
-                    ),
-                ),
-            )
-        }
-
-        // Sockopt (Happy Eyeballs + UseIP or TFO)
-        val sockopt = linkedMapOf<String, Any?>()
-        if (resolvedStrategy != null) {
-            sockopt["domainStrategy"] = resolvedStrategy
-        }
-        if (happyEyeballs != null) {
-            sockopt["happyEyeballs"] = happyEyeballs
-        }
-        if (settings.tcpFastOpen) {
-            sockopt["tcpFastOpen"] = true
-        }
-        if (sockopt.isNotEmpty()) {
-            stream["sockopt"] = sockopt
-        }
-
-        return stream
-    }
-
-    // -------------------------------------------------------- Custom JSON
-
-    @Suppress("UNCHECKED_CAST")
-    private fun buildCustomConfig(
-        profile: Profile,
-        settings: AppSettings,
-        forSpeedtest: Boolean,
-    ): String {
-        val raw = profile.customConfig.trim()
-        val parsed = runCatching { Json.miniMap(raw) }.getOrNull() ?: return raw
-
-        val outbounds = parsed["outbounds"] as? List<Map<String, Any?>>
-        if (outbounds != null && outbounds.any { it.containsKey("protocol") }) {
-            val mutable = LinkedHashMap(parsed)
-            if (forSpeedtest) {
-                mutable.remove("inbounds")
-                mutable.remove("dns")
-                mutable.remove("fakedns")
-                mutable.remove("stats")
-                mutable.remove("policy")
-                mutable["routing"] = mapObj("domainStrategy" to "AsIs", "rules" to emptyList<Any>())
-            } else {
-                mutable["inbounds"] = buildInbounds(settings)
-                mutable["stats"] = emptyMap<String, Any?>()
-                mutable["policy"] = mapObj(
-                    "levels" to mapObj(
-                        "8" to mapObj(
-                            "handshake" to 4,
-                            "connIdle" to 300,
-                            "uplinkOnly" to 1,
-                            "downlinkOnly" to 1,
-                        ),
-                    ),
-                    "system" to mapObj(
-                        "statsOutboundUplink" to true,
-                        "statsOutboundDownlink" to true,
-                    ),
-                )
-            }
-            return Json.any(mutable)
-        }
-
-        if (parsed.containsKey("protocol") && parsed.containsKey("settings")) {
-            val outboundMap = LinkedHashMap(parsed)
-            outboundMap["tag"] = "proxy"
-            if (forSpeedtest) {
-                return Json.any(
-                    mapObj(
-                        "log" to mapObj("loglevel" to "warning"),
-                        "outbounds" to listOf(
-                            outboundMap,
-                            mapObj("tag" to "direct", "protocol" to "freedom"),
-                            mapObj("tag" to "block", "protocol" to "blackhole"),
-                        ),
-                        "routing" to mapObj("domainStrategy" to "AsIs", "rules" to emptyList<Any>()),
-                    ),
-                )
-            }
-            val root = linkedMapOf<String, Any?>(
-                "log" to mapObj("loglevel" to settings.logLevel),
-                "inbounds" to buildInbounds(settings),
-                "dns" to buildDns(settings, defaultBootstrapDnsHosts(), includeGeoRules = false),
-                "outbounds" to listOf(
-                    outboundMap,
-                    mapObj("tag" to "direct", "protocol" to "freedom"),
-                    mapObj("tag" to "block", "protocol" to "blackhole"),
-                    mapObj("tag" to "dns-out", "protocol" to "dns"),
-                ),
-                "routing" to buildRouting(profile, settings, includeGeoRules = false),
-            )
-            return Json.any(root)
-        }
-
-        return raw
-    }
-
-    // --------------------------------------------------- DNS Resolution Helper
 
     private fun isPureIpAddress(value: String): Boolean {
         val v = value.trim().removeSurrounding("[", "]")
@@ -941,9 +1135,9 @@ object ConfigBuilder {
 
     /** Basic sanity check before handing the config to Xray-core. */
     fun validate(config: String): String? = runCatching {
-        val map = Json.miniMap(config)
-        val outbounds = map["outbounds"] as? List<*>
-        if (outbounds.isNullOrEmpty()) return "no outbounds block"
+        val obj = JsonUtil.parseString(config) ?: return "invalid JSON"
+        val outbounds = obj.getAsJsonArray("outbounds")
+        if (outbounds == null || outbounds.size() == 0) return "no outbounds block"
         null
     }.getOrElse { it.message ?: "invalid JSON" }
 }

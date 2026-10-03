@@ -1,6 +1,9 @@
 package app.nebulabox.engine
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.os.Build
+import android.system.OsConstants
 import app.nebulabox.Application
 import app.nebulabox.util.AppLogger
 import com.v2ray.ang.service.TProxyService
@@ -17,8 +20,10 @@ import kotlinx.coroutines.launch
 import libv2ray.CoreCallbackHandler
 import libv2ray.CoreController
 import libv2ray.Libv2ray
+import libv2ray.ProcessFinder
 import java.io.File
 import java.io.FileOutputStream
+import java.net.InetSocketAddress
 
 private const val TAG = "XrayEngine"
 
@@ -53,9 +58,39 @@ class LibboxEngine : TunnelEngine {
 
         override fun onEmitStatus(code: Long, statusMsg: String?): Long {
             if (!statusMsg.isNullOrBlank()) {
-                emitLog(3, "Xray [$code]: $statusMsg")
+                emitLog(3, "Core status [$code]: $statusMsg")
             }
             return 0L
+        }
+    }
+
+    private class XrayProcessFinder(context: Context) : ProcessFinder {
+        private val cm: ConnectivityManager? = context.getSystemService(ConnectivityManager::class.java)
+
+        override fun findProcessByConnection(
+            network: String,
+            srcIP: String,
+            srcPort: Long,
+            destIP: String,
+            destPort: Long,
+        ): Long {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return -1L
+            if (cm == null) return -1L
+            val proto = when (network) {
+                "tcp" -> OsConstants.IPPROTO_TCP
+                "udp" -> OsConstants.IPPROTO_UDP
+                else -> return -1L
+            }
+            if (destIP.isBlank() || destPort == 0L) return -1L
+            return try {
+                cm.getConnectionOwnerUid(
+                    proto,
+                    InetSocketAddress(srcIP, srcPort.toInt()),
+                    InetSocketAddress(destIP, destPort.toInt()),
+                ).toLong()
+            } catch (_: Exception) {
+                -1L
+            }
         }
     }
 
@@ -135,23 +170,35 @@ class LibboxEngine : TunnelEngine {
         emitLog(3, "Starting Xray-core for profile: $profileName")
 
         try {
-            if (!openTun()) {
-                throw IllegalStateException("VPN permission denied or failed to establish TUN interface")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                runCatching {
+                    coreController.registerProcessFinder(XrayProcessFinder(Application.instance))
+                }
             }
 
             val usesNativeTun = config.contains("\"protocol\":\"tun\"") || config.contains("\"protocol\": \"tun\"")
-            val tunFd = if (usesNativeTun) {
+            if (usesNativeTun) {
+                if (!openTun()) {
+                    throw IllegalStateException("VPN permission denied or failed to establish TUN interface")
+                }
                 val fd = Engines.tunProvider?.tunFileDescriptor() ?: -1
                 if (fd <= 0) {
                     throw IllegalStateException("Invalid TUN file descriptor: $fd")
                 }
-                fd
+                emitLog(3, "Calling coreController.startLoop (nativeTun=true, tunFd=$fd)")
+                coreController.startLoop(config, fd)
             } else {
-                0
+                // Exact v2rayNG 2.3.10 order for hev-socks5-tunnel:
+                // 1. Start Xray-core loop first so 127.0.0.1:10808 is already listening
+                // 2. Then establish the Android VPN TUN interface
+                coreController.startLoop(config, 0)
+                if (!coreController.isRunning) {
+                    throw IllegalStateException("Xray-core failed to enter running state")
+                }
+                if (!openTun()) {
+                    throw IllegalStateException("VPN permission denied or failed to establish TUN interface")
+                }
             }
-
-            emitLog(3, "Calling coreController.startLoop (nativeTun=$usesNativeTun, tunFd=$tunFd)")
-            coreController.startLoop(config, tunFd)
 
             if (!coreController.isRunning) {
                 throw IllegalStateException("Xray-core failed to enter running state")
@@ -163,7 +210,7 @@ class LibboxEngine : TunnelEngine {
                 profileName = profileName,
                 startedAt = startedAt,
             )
-            emitLog(3, "Xray-core started successfully (${Libv2ray.checkVersionX()})")
+            emitLog(3, "Xray-core started successfully")
 
             startStatsPolling(profileName, startedAt)
         } catch (t: Throwable) {
@@ -266,9 +313,11 @@ class LibboxEngine : TunnelEngine {
         return try {
             ensureInit()
             val url = testUrl.ifBlank { "https://www.gstatic.com/generate_204" }
-            Libv2ray.measureOutboundDelay(config, url)
+            val delay = Libv2ray.measureOutboundDelay(config, url)
+            AppLogger.i("Xray-core", "Real ping (MeasureOutboundDelay): ${delay}ms")
+            delay
         } catch (t: Throwable) {
-            AppLogger.w(TAG, "measureOutboundDelay failed: ${t.message}")
+            AppLogger.e("Xray-core", "Real ping (MeasureOutboundDelay) error: ${t.message}")
             -1L
         }
     }
@@ -277,9 +326,11 @@ class LibboxEngine : TunnelEngine {
         return try {
             if (!coreController.isRunning) return -1L
             val url = testUrl.ifBlank { "https://www.gstatic.com/generate_204" }
-            coreController.measureDelay(url)
+            val delay = coreController.measureDelay(url)
+            AppLogger.i("Xray-core", "Active connection delay (MeasureDelay): ${delay}ms")
+            delay
         } catch (t: Throwable) {
-            AppLogger.w(TAG, "measureActiveDelay failed: ${t.message}")
+            AppLogger.e("Xray-core", "Active connection delay (MeasureDelay) error: ${t.message}")
             -1L
         }
     }

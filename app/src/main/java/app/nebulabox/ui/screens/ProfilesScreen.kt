@@ -40,24 +40,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Menu
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -92,9 +83,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,6 +107,8 @@ import app.nebulabox.ui.colorFabInactiveDark
 import app.nebulabox.ui.colorFabInactiveLight
 import app.nebulabox.ui.colorPing
 import app.nebulabox.ui.colorPingRed
+import app.nebulabox.ui.dividerColorDark
+import app.nebulabox.ui.dividerColorLight
 import app.nebulabox.util.Formatters
 import app.nebulabox.util.IpLocationChecker
 import app.nebulabox.util.ShareLinkParser
@@ -125,13 +118,8 @@ import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.launch
 
 /**
- * Main screen modeled directly on `v2rayNG 2.3.10` (`MainScreen.kt`, `MainTopBar.kt`,
- * `MainServerPager.kt`, `MainBottomBar.kt`):
- *  - Clean TopAppBar with inline search, `+` Import menu, and `⋮` More menu
- *  - Subscription group `ScrollableTabRow` with orange indicator
- *  - Crisp `ServerListItem` rows with left selection indicator, Share/Edit/Delete actions,
- *    orange protocol/transport tag, and green/red ping result
- *  - Bottom status bar (tap to test real delay + live speed + exit IP/country) with docked orange Play/Stop FAB
+ * Main screen built directly from `v2rayNG 2.3.10` (`MainScreen.kt`, `MainTopBar.kt`,
+ * `MainServerPager.kt`, `MainBottomBar.kt`).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -147,13 +135,13 @@ fun ProfilesScreen(
     val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
     val testingProgress by viewModel.testingProgress.collectAsStateWithLifecycle()
-    val testingProfileIds by viewModel.testingProfileIds.collectAsStateWithLifecycle()
     val isUpdatingSubs by viewModel.updatingSubscriptions.collectAsStateWithLifecycle()
     val isTestingActive by viewModel.checkingLocation.collectAsStateWithLifecycle()
     val activePingMs by viewModel.activeDelayMs.collectAsStateWithLifecycle()
     val exitIpInfo by viewModel.endpointLocation.collectAsStateWithLifecycle()
-    val isPinging = testingProgress != null || testingProfileIds.isNotEmpty()
+    val isTesting = testingProgress != null || isTestingActive
 
     val context = LocalContext.current
     val isDarkTheme = LocalDarkTheme.current
@@ -196,13 +184,14 @@ fun ProfilesScreen(
     }
 
     val subBadgeMap = remember(subscriptions) {
-        subscriptions.associate { it.id to (it.remarks.firstOrNull()?.uppercase() ?: "") }
+        subscriptions.associate { it.id to (it.remarks.firstOrNull()?.toString() ?: "") }
     }
 
     Scaffold(
         topBar = {
             MainTopBar(
-                isLoading = isPinging || isUpdatingSubs || isTestingActive,
+                isLoading = isLoading,
+                isTesting = testingProgress != null,
                 showSearch = showSearch,
                 searchQuery = searchQuery,
                 onSearchQueryChange = { searchQuery = it },
@@ -212,6 +201,7 @@ fun ProfilesScreen(
                 },
                 onSearchToggle = { showSearch = it },
                 onMenuClick = onOpenDrawer,
+                onCancelTesting = { viewModel.cancelAllPing() },
                 onImportClipboard = {
                     val clip = readClipboard(context)
                     if (clip.isNullOrBlank()) {
@@ -222,9 +212,7 @@ fun ProfilesScreen(
                 },
                 onImportUrlOrText = { showImportDialog = true },
                 onNewProtocol = onNewWithProtocol,
-                onRestartService = {
-                    viewModel.restartTunnel()
-                },
+                onRestartService = { viewModel.restartTunnel() },
                 onPingAllTcp = { viewModel.testAllTcpPing() },
                 onPingAllReal = { viewModel.testAllRealPing() },
                 onSortByTestResults = { viewModel.sortByTestResults() },
@@ -252,8 +240,9 @@ fun ProfilesScreen(
         bottomBar = {
             MainBottomBar(
                 status = status,
-                activePingMs = activePingMs ?: -1L,
+                activePingMs = activePingMs,
                 isTestingActive = isTestingActive,
+                testingProgress = testingProgress,
                 exitIpInfo = exitIpInfo,
                 isDarkTheme = isDarkTheme,
                 onTestCurrentServer = { viewModel.testActiveConnectionDelay() },
@@ -274,14 +263,13 @@ fun ProfilesScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            // Subscription Group Tab Bar (exact v2rayNG GroupTabBar)
             if (subscriptions.isNotEmpty()) {
                 val allTabs = remember(subscriptions, profiles) {
                     buildList {
-                        add(Triple("", "All (${profiles.size})", profiles.size))
+                        add(Triple("", "All", profiles.size))
                         subscriptions.forEach { sub ->
                             val count = profiles.count { it.subscriptionId == sub.id }
-                            add(Triple(sub.id, "${sub.remarks} ($count)", count))
+                            add(Triple(sub.id, sub.remarks, count))
                         }
                     }
                 }
@@ -335,9 +323,9 @@ fun ProfilesScreen(
                     ) {
                         Text(
                             text = if (profiles.isEmpty()) {
-                                "Tap + in the top bar to import configs from clipboard or add a server."
+                                "Tap + in the top bar to import configuration from Clipboard"
                             } else {
-                                "No matching servers in this group."
+                                "No matching servers"
                             },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -353,7 +341,7 @@ fun ProfilesScreen(
                                     }
                                 },
                             ) {
-                                Text("Import from Clipboard")
+                                Text("Import config from Clipboard")
                             }
                         }
                     }
@@ -369,21 +357,23 @@ fun ProfilesScreen(
                         ServerListItem(
                             profile = profile,
                             isSelected = isSelected,
-                            subscriptionBadge = subBadgeMap[profile.subscriptionId].orEmpty(),
+                            subscriptionBadge = if (selectedSubId.isBlank()) {
+                                subBadgeMap[profile.subscriptionId].orEmpty()
+                            } else {
+                                ""
+                            },
                             onSelect = { viewModel.selectProfile(profile) },
                             onShare = { shareTarget = profile },
                             onEdit = { onEdit(profile) },
                             onDelete = { viewModel.deleteProfile(profile.id) },
-                            onPingSingle = { viewModel.testSingleProfileRealPing(profile) },
                         )
-                        AppDivider(modifier = Modifier.padding(horizontal = 12.dp))
+                        ItemDivider()
                     }
                 }
             }
         }
     }
 
-    // Share method dialog (exact v2rayNG ShareMethodDialog)
     shareTarget?.let { profile ->
         ShareMethodDialog(
             profile = profile,
@@ -453,8 +443,8 @@ fun ProfilesScreen(
 
     if (showDeleteDupConfirm) {
         ConfirmDialog(
-            title = "Delete duplicate configs?",
-            message = "Remove servers with identical protocol, address, port, credentials, and transport settings.",
+            title = "Remove duplicate configs?",
+            message = "Remove configurations with identical protocol, address, port, credentials, and transport settings.",
             onDismiss = { showDeleteDupConfirm = false },
             onConfirm = {
                 showDeleteDupConfirm = false
@@ -465,8 +455,8 @@ fun ProfilesScreen(
 
     if (showDeleteInvalidConfirm) {
         ConfirmDialog(
-            title = "Delete invalid configs?",
-            message = "Remove all servers that timed out (-1 ms) during the last test.",
+            title = "Remove invalid configs?",
+            message = "Remove all configurations that failed (-1 ms) during the last test.",
             onDismiss = { showDeleteInvalidConfirm = false },
             onConfirm = {
                 showDeleteInvalidConfirm = false
@@ -477,8 +467,8 @@ fun ProfilesScreen(
 
     if (showDeleteAllConfirm) {
         ConfirmDialog(
-            title = "Delete all configs?",
-            message = "Remove all servers in the current group.",
+            title = "Remove all configs?",
+            message = "Remove all configurations in the current group.",
             onDismiss = { showDeleteAllConfirm = false },
             onConfirm = {
                 showDeleteAllConfirm = false
@@ -488,19 +478,31 @@ fun ProfilesScreen(
     }
 }
 
+@Composable
+private fun ItemDivider(modifier: Modifier = Modifier) {
+    val color = if (LocalDarkTheme.current) dividerColorDark else dividerColorLight
+    HorizontalDivider(
+        modifier = modifier.padding(horizontal = 12.dp),
+        thickness = 0.5.dp,
+        color = color,
+    )
+}
+
 /**
- * Exact `v2rayNG 2.3.10` TopAppBar (`MainTopBar.kt` & `AppTopBar` in `Components.kt`).
+ * Exact `v2rayNG 2.3.10` `MainTopBar` (`com.v2ray.ang.ui.main.MainTopBar` + `AppTopBar`).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MainTopBar(
     isLoading: Boolean,
+    isTesting: Boolean,
     showSearch: Boolean,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
     onSearchClose: () -> Unit,
     onSearchToggle: (Boolean) -> Unit,
     onMenuClick: () -> Unit,
+    onCancelTesting: () -> Unit,
     onImportClipboard: () -> Unit,
     onImportUrlOrText: () -> Unit,
     onNewProtocol: (Protocol) -> Unit,
@@ -531,7 +533,7 @@ private fun MainTopBar(
                             textStyle = TextStyle(color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp),
                             placeholder = {
                                 Text(
-                                    "Search servers...",
+                                    "Filter config",
                                     style = TextStyle(color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 16.sp),
                                 )
                             },
@@ -560,25 +562,46 @@ private fun MainTopBar(
             navigationIcon = {
                 if (showSearch) {
                     IconButton(onClick = onSearchClose) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_arrow_back_24dp),
+                            contentDescription = "Back",
+                        )
                     }
                 } else {
                     IconButton(onClick = onMenuClick) {
-                        Icon(Icons.Filled.Menu, contentDescription = "Menu")
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_menu_24dp),
+                            contentDescription = "Menu",
+                        )
                     }
                 }
             },
             actions = {
                 if (!showSearch) {
                     IconButton(onClick = { onSearchToggle(true) }) {
-                        Icon(Icons.Filled.Search, contentDescription = "Search")
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_search_24dp),
+                            contentDescription = "Search",
+                        )
                     }
                 }
 
-                // + Import / Add Menu (exact v2rayNG ImportMenuAction)
+                if (isTesting) {
+                    TextButton(onClick = onCancelTesting) {
+                        Text(
+                            text = stringResource(android.R.string.cancel),
+                            color = MaterialTheme.colorScheme.secondary,
+                        )
+                    }
+                }
+
+                // Exact v2rayNG ImportMenuAction (ic_add_24dp)
                 Box {
                     IconButton(onClick = { showImportMenu = true }) {
-                        Icon(Icons.Filled.Add, contentDescription = "Import / Add")
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_add_24dp),
+                            contentDescription = "Import",
+                        )
                     }
                     DropdownMenu(
                         expanded = showImportMenu,
@@ -593,7 +616,7 @@ private fun MainTopBar(
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Import from URL / Subscription / JSON") },
+                            text = { Text("Import config from URL / JSON") },
                             onClick = {
                                 showImportMenu = false
                                 onImportUrlOrText()
@@ -601,44 +624,51 @@ private fun MainTopBar(
                         )
                         AppDivider()
                         DropdownMenuItem(
-                            text = { Text("Type manually [VLESS]") },
-                            onClick = { showImportMenu = false; onNewProtocol(Protocol.VLESS) },
-                        )
-                        DropdownMenuItem(
                             text = { Text("Type manually [VMess]") },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.VMESS) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Type manually [VLESS]") },
+                            onClick = { showImportMenu = false; onNewProtocol(Protocol.VLESS) },
                         )
                         DropdownMenuItem(
                             text = { Text("Type manually [Shadowsocks]") },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.SHADOWSOCKS) },
                         )
                         DropdownMenuItem(
-                            text = { Text("Type manually [Trojan]") },
-                            onClick = { showImportMenu = false; onNewProtocol(Protocol.TROJAN) },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Type manually [Hysteria2]") },
-                            onClick = { showImportMenu = false; onNewProtocol(Protocol.HYSTERIA2) },
-                        )
-                        DropdownMenuItem(
                             text = { Text("Type manually [Socks]") },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.SOCKS) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Type manually [Http]") },
+                            onClick = { showImportMenu = false; onNewProtocol(Protocol.HTTP) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Type manually [Trojan]") },
+                            onClick = { showImportMenu = false; onNewProtocol(Protocol.TROJAN) },
                         )
                         DropdownMenuItem(
                             text = { Text("Type manually [WireGuard]") },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.WIREGUARD) },
                         )
                         DropdownMenuItem(
-                            text = { Text("Type manually [Custom JSON]") },
+                            text = { Text("Type manually [Hysteria2]") },
+                            onClick = { showImportMenu = false; onNewProtocol(Protocol.HYSTERIA2) },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Type manually [Custom]") },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.CUSTOM) },
                         )
                     }
                 }
 
-                // ⋮ More Menu (exact v2rayNG MainMoreMenuAction)
+                // Exact v2rayNG MainMoreMenuAction (ic_more_vert_24dp)
                 Box {
                     IconButton(onClick = { showMoreMenu = true }) {
-                        Icon(Icons.Filled.MoreVert, contentDescription = "More")
+                        Icon(
+                            painter = painterResource(id = R.drawable.ic_more_vert_24dp),
+                            contentDescription = "More",
+                        )
                     }
                     DropdownMenu(
                         expanded = showMoreMenu,
@@ -650,11 +680,11 @@ private fun MainTopBar(
                             onClick = { showMoreMenu = false; onRestartService() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Real ping all server") },
+                            text = { Text("Real ping all configuration") },
                             onClick = { showMoreMenu = false; onPingAllReal() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Ping all server (TCP)") },
+                            text = { Text("Ping all configuration") },
                             onClick = { showMoreMenu = false; onPingAllTcp() },
                         )
                         DropdownMenuItem(
@@ -666,19 +696,19 @@ private fun MainTopBar(
                             onClick = { showMoreMenu = false; onUpdateSubscriptions() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Export all config to clipboard") },
+                            text = { Text("Export all non-custom config") },
                             onClick = { showMoreMenu = false; onExportAll() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Delete duplicate config") },
+                            text = { Text("Remove duplicate config") },
                             onClick = { showMoreMenu = false; onDeleteDuplicates() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Delete invalid config") },
+                            text = { Text("Remove invalid config") },
                             onClick = { showMoreMenu = false; onDeleteInvalid() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Delete all config") },
+                            text = { Text("Remove all config") },
                             onClick = { showMoreMenu = false; onDeleteAll() },
                         )
                     }
@@ -706,7 +736,7 @@ private fun MainTopBar(
 }
 
 /**
- * Exact `v2rayNG 2.3.10` Server Row (`ServerListItem` in `MainServerPager.kt`).
+ * Exact `v2rayNG 2.3.10` `ServerListItem` (`com.v2ray.ang.ui.main.MainServerPager.kt`).
  */
 @Composable
 private fun ServerListItem(
@@ -717,25 +747,8 @@ private fun ServerListItem(
     onShare: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onPingSingle: () -> Unit,
 ) {
-    val testResult = when {
-        profile.lastDelayMs == -2 -> "..."
-        profile.lastDelayMs == 0 -> ""
-        else -> "${profile.lastDelayMs} ms"
-    }
-
-    val typeDescription = remember(profile) {
-        buildProtocolDescription(profile)
-    }
-
-    val serverEndpoint = remember(profile) {
-        if (profile.protocol == Protocol.CUSTOM) {
-            "Custom Xray JSON"
-        } else {
-            "${profile.server}:${profile.serverPort}"
-        }
-    }
+    val testResult = profile.testDelayString
 
     Row(
         modifier = Modifier
@@ -743,7 +756,7 @@ private fun ServerListItem(
             .height(IntrinsicSize.Min)
             .clickable(onClick = onSelect),
     ) {
-        // Left selection indicator bar (exact v2rayNG 10.dp box with 4.dp vertical bar)
+        // Left selection indicator bar (exact v2rayNG 10.dp box with 6.dp spacer + 4.dp primary bar)
         Box(
             Modifier
                 .width(10.dp)
@@ -757,7 +770,7 @@ private fun ServerListItem(
                             .width(4.dp)
                             .fillMaxHeight()
                             .padding(vertical = 10.dp)
-                            .background(MaterialTheme.colorScheme.secondary),
+                            .background(MaterialTheme.colorScheme.primary),
                     )
                 }
             }
@@ -768,7 +781,7 @@ private fun ServerListItem(
                 .weight(1f)
                 .padding(start = 8.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
         ) {
-            // Line 1: Remarks + Share / Edit / Delete icons
+            // Line 1: Remarks + Share / Edit / Delete (exact v2rayNG 2.3.10 vector icons)
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -782,56 +795,53 @@ private fun ServerListItem(
                 )
                 IconButton(onClick = onShare, modifier = Modifier.size(36.dp)) {
                     Icon(
-                        imageVector = Icons.Filled.Share,
+                        painter = painterResource(id = R.drawable.ic_share_24dp),
                         contentDescription = "Share",
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
                     )
                 }
                 IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
                     Icon(
-                        imageVector = Icons.Filled.Edit,
+                        painter = painterResource(id = R.drawable.ic_edit_24dp),
                         contentDescription = "Edit",
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
                     )
                 }
                 IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
                     Icon(
-                        imageVector = Icons.Filled.Delete,
+                        painter = painterResource(id = R.drawable.ic_delete_24dp),
                         contentDescription = "Delete",
-                        modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp),
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Line 2: Subscription badge + server host:port
+            // Line 2: Subscription badge + server : port
             Row(
                 Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                if (subscriptionBadge.isNotBlank()) {
+                if (subscriptionBadge.isNotEmpty()) {
                     Box(
                         Modifier
-                            .size(22.dp)
+                            .size(24.dp)
                             .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.2f)),
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
                         contentAlignment = Alignment.Center,
                     ) {
                         Text(
                             text = subscriptionBadge,
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.secondary,
+                            color = MaterialTheme.colorScheme.primary,
                         )
                     }
                     Spacer(Modifier.width(6.dp))
                 }
                 Text(
-                    text = serverEndpoint,
+                    text = profile.formattedAddress,
                     modifier = Modifier.weight(1f),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -840,16 +850,16 @@ private fun ServerListItem(
                 )
             }
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-            // Line 3: Left = Protocol/Transport/Security (Orange), Right = Ping delay (Green/Red, tap to test)
+            // Line 3: Type description (orange) + Ping result (green / pink-red, empty when 0)
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = typeDescription,
+                    text = profile.typeDescription,
                     modifier = Modifier.weight(1f, fill = false),
                     style = MaterialTheme.typography.bodySmall,
                     color = colorConfigType,
@@ -858,46 +868,25 @@ private fun ServerListItem(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = testResult.ifEmpty { "Tap to ping" },
+                    text = testResult,
                     style = MaterialTheme.typography.bodySmall,
-                    color = when {
-                        testResult.isEmpty() -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                        profile.lastDelayMs < 0 -> colorPingRed
-                        else -> colorPing
-                    },
+                    color = if (profile.lastDelayMs < 0) colorPingRed else colorPing,
                     maxLines = 1,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable(onClick = onPingSingle)
-                        .padding(horizontal = 4.dp, vertical = 2.dp),
                 )
             }
         }
     }
 }
 
-private fun buildProtocolDescription(profile: Profile): String {
-    if (profile.protocol == Protocol.CUSTOM) return "CUSTOM"
-    val parts = mutableListOf(profile.protocol.name)
-    val net = profile.transport.type.ifBlank { "tcp" }.lowercase()
-    if (net.isNotBlank() && net != "tcp") {
-        parts.add(net)
-    }
-    when {
-        profile.tls.reality -> parts.add("reality")
-        profile.tls.enabled -> parts.add(if (profile.tls.insecure) "tls insecure" else "tls")
-    }
-    return parts.joinToString(" / ")
-}
-
 /**
- * Exact `v2rayNG 2.3.10` Bottom Status Bar + Floating Play/Stop FAB (`MainBottomBar.kt`).
+ * Exact `v2rayNG 2.3.10` `MainBottomBar` (`com.v2ray.ang.ui.main.MainBottomBar.kt`).
  */
 @Composable
 private fun MainBottomBar(
     status: app.nebulabox.engine.TunnelStatus,
-    activePingMs: Long,
+    activePingMs: Long?,
     isTestingActive: Boolean,
+    testingProgress: Pair<Int, Int>?,
     exitIpInfo: IpLocationChecker.EndpointLocation?,
     isDarkTheme: Boolean,
     onTestCurrentServer: () -> Unit,
@@ -914,27 +903,37 @@ private fun MainBottomBar(
         }
     }
 
-    val primaryText = when (status.state) {
-        TunnelState.STARTED -> when {
-            isTestingActive -> "Testing connection..."
-            activePingMs > 0L -> "Connected: test delay ${activePingMs} ms"
-            else -> "Connected, tap to check connection"
+    val statusText = when {
+        testingProgress != null -> {
+            val left = (testingProgress.second - testingProgress.first).coerceAtLeast(0)
+            "Testing… ($left / ${testingProgress.second})"
         }
-        TunnelState.STARTING -> "Starting service..."
-        TunnelState.STOPPING -> "Stopping service..."
-        TunnelState.STOPPED -> status.message.ifBlank { "Not connected" }
+        isTestingActive -> "Testing…"
+        status.state == TunnelState.STARTED -> {
+            when {
+                activePingMs != null && activePingMs > 0L -> {
+                    val base = "Test available: ${activePingMs}ms"
+                    if (exitIpInfo != null && exitIpInfo.ip.isNotBlank()) {
+                        "$base\n(${exitIpInfo.flagEmoji} ${exitIpInfo.countryName}) ${exitIpInfo.ip}"
+                    } else {
+                        base
+                    }
+                }
+                activePingMs != null && activePingMs < 0L -> "Test failed: Timeout"
+                exitIpInfo != null && exitIpInfo.ip.isNotBlank() ->
+                    "Connected\n(${exitIpInfo.flagEmoji} ${exitIpInfo.countryName}) ${exitIpInfo.ip}"
+                else -> "Connected, tap to check connection"
+            }
+        }
+        status.state == TunnelState.STARTING -> "Starting service…"
+        status.state == TunnelState.STOPPING -> "Stopping service…"
+        else -> status.message.ifBlank { "Not connected" }
     }
 
-    val secondaryText = if (isRunning) {
-        val speedPart = "↑ ${Formatters.speed(status.uplink)}   ↓ ${Formatters.speed(status.downlink)}"
-        val ipPart = if (exitIpInfo != null && exitIpInfo.ip.isNotBlank()) {
-            "  •  ${exitIpInfo.flagEmoji} ${exitIpInfo.ip} ${exitIpInfo.countryName}".trimEnd()
-        } else {
-            ""
-        }
-        speedPart + ipPart
+    val speedText = if (isRunning) {
+        "${Formatters.speed(status.uplink)} ↑\n${Formatters.speed(status.downlink)} ↓"
     } else {
-        null
+        ""
     }
 
     Box(modifier = Modifier.fillMaxWidth()) {
@@ -942,36 +941,34 @@ private fun MainBottomBar(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surface)
-                .clickable(enabled = isRunning, onClick = onTestCurrentServer)
+                .clickable(onClick = onTestCurrentServer)
                 .windowInsetsPadding(WindowInsets.navigationBars),
         ) {
             AppDivider()
-            Column(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(64.dp)
-                    .padding(start = 16.dp, end = 92.dp),
-                verticalArrangement = Arrangement.Center,
+                    .padding(start = 16.dp, end = 96.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = primaryText,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (status.state == TunnelState.STOPPED && status.message.isNotBlank()) {
-                        MaterialTheme.colorScheme.error
-                    } else {
-                        MaterialTheme.colorScheme.onSurface
-                    },
-                    maxLines = 1,
+                    text = statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
-                if (!secondaryText.isNullOrBlank()) {
-                    Spacer(Modifier.height(2.dp))
+                if (speedText.isNotEmpty()) {
                     Text(
-                        text = secondaryText,
+                        text = speedText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = colorPing,
-                        maxLines = 1,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(start = 8.dp),
                     )
                 }
             }
@@ -983,8 +980,8 @@ private fun MainBottomBar(
                     if (!isRunning) {
                         scope.launch {
                             rotationAnim.animateTo(
-                                targetValue = 360f,
-                                animationSpec = tween(durationMillis = 1200),
+                                targetValue = 720f,
+                                animationSpec = tween(durationMillis = 1600),
                             )
                         }
                     }
@@ -1004,14 +1001,15 @@ private fun MainBottomBar(
             } else {
                 colorFabInactiveLight
             },
+            contentColor = Color.White,
         ) {
             Icon(
-                imageVector = if (isRunning) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                painter = painterResource(
+                    id = if (isRunning) R.drawable.ic_stop_24dp else R.drawable.ic_play_24dp,
+                ),
                 contentDescription = if (isRunning) "Stop" else "Start",
                 tint = Color.White,
-                modifier = Modifier
-                    .size(26.dp)
-                    .graphicsLayer { rotationZ = rotationAnim.value },
+                modifier = Modifier.graphicsLayer { rotationZ = rotationAnim.value },
             )
         }
     }
@@ -1049,7 +1047,7 @@ private fun ShareMethodDialog(
                     )
                 }
                 Text(
-                    text = "Export full Xray JSON to Clipboard",
+                    text = "Export full configuration to Clipboard",
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1188,7 +1186,7 @@ fun SubscriptionsManagerDialog(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Subscription Groups")
+                Text("Subscription group setting")
                 if (subscriptions.isNotEmpty()) {
                     IconButton(onClick = onUpdateAll, enabled = !isUpdating) {
                         Icon(Icons.Filled.Refresh, contentDescription = "Update All")
@@ -1222,7 +1220,7 @@ fun SubscriptionsManagerDialog(
                                 }
                                 IconButton(onClick = { onDeleteSubscription(sub.id, true) }) {
                                     Icon(
-                                        Icons.Filled.Delete,
+                                        painter = painterResource(id = R.drawable.ic_delete_24dp),
                                         contentDescription = "Delete",
                                         tint = MaterialTheme.colorScheme.error,
                                     )
@@ -1233,7 +1231,7 @@ fun SubscriptionsManagerDialog(
                     }
                 }
 
-                Text("Add New Subscription", style = MaterialTheme.typography.labelLarge)
+                Text("Add Subscription", style = MaterialTheme.typography.labelLarge)
                 OutlinedTextField(
                     value = remarks,
                     onValueChange = { remarks = it },
@@ -1259,7 +1257,7 @@ fun SubscriptionsManagerDialog(
                 },
                 enabled = url.isNotBlank() && !isUpdating,
             ) {
-                Text("Add & Sync")
+                Text("Save & Update")
             }
         },
         dismissButton = {

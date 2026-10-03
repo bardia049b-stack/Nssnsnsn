@@ -248,6 +248,9 @@ object ShareLinkParser {
         }
         if (profile.tls.echConfigList.isNotBlank()) q["ech"] = profile.tls.echConfigList
         if (profile.tls.pinnedCA256.isNotBlank()) q["pcs"] = profile.tls.pinnedCA256
+        if (profile.tls.verifyPeerCertByName.isNotBlank()) q["vcn"] = profile.tls.verifyPeerCertByName
+        if (profile.tls.mldsa65Verify.isNotBlank()) q["pqv"] = profile.tls.mldsa65Verify
+        if (profile.finalMask.isNotBlank()) q["fm"] = profile.finalMask
 
         val pathWithEd = buildWsPathWithEd(profile.transport)
         when (net) {
@@ -338,7 +341,7 @@ object ShareLinkParser {
         val isReality = security == "reality" || !params["pbk"].isNullOrBlank()
         val isTls = security == "tls" || isReality
         val sni = params["sni"] ?: params["peer"] ?: wsHost.ifBlank { if (isTls && !isReality) host else "" }
-        val fp = (params["fp"] ?: "").ifBlank { "chrome" }
+        val fp = params["fp"] ?: ""
         val tls = TlsSettings(
             enabled = isTls,
             serverName = sni,
@@ -348,10 +351,12 @@ object ShareLinkParser {
             realityPublicKey = params["pbk"] ?: "",
             realityShortId = params["sid"] ?: "",
             realitySpiderX = params["spx"] ?: "",
-            utls = isReality || !params["fp"].isNullOrBlank(),
+            utls = isReality || fp.isNotBlank(),
             utlsFingerprint = fp,
             echConfigList = params["ech"] ?: "",
             pinnedCA256 = params["pcs"] ?: params["pinSHA256"] ?: "",
+            verifyPeerCertByName = params["vcn"] ?: "",
+            mldsa65Verify = params["pqv"] ?: "",
         )
 
         return Profile(
@@ -363,6 +368,7 @@ object ShareLinkParser {
             uuid = uuid,
             encryption = params["encryption"] ?: "none",
             flow = params["flow"] ?: "",
+            finalMask = params["fm"] ?: "",
             transport = transport,
             tls = tls,
         )
@@ -474,7 +480,7 @@ object ShareLinkParser {
         val isReality = security == "reality" || !params["pbk"].isNullOrBlank()
         val tlsEnabled = security != "none"
         val wsHost = params["host"] ?: ""
-        val fp = (params["fp"] ?: "").ifBlank { "chrome" }
+        val fp = params["fp"] ?: ""
         val rawPath = params["path"] ?: ""
         val (_, parsedEd, parsedEh) = extractWsEarlyData(
             rawPath = rawPath,
@@ -489,6 +495,7 @@ object ShareLinkParser {
             serverPort = port,
             password = decode(password),
             flow = params["flow"] ?: "",
+            finalMask = params["fm"] ?: "",
             transport = Transport(
                 type = type,
                 host = wsHost,
@@ -511,10 +518,12 @@ object ShareLinkParser {
                 realityPublicKey = params["pbk"] ?: "",
                 realityShortId = params["sid"] ?: "",
                 realitySpiderX = params["spx"] ?: "",
-                utls = isReality || !params["fp"].isNullOrBlank(),
+                utls = isReality || fp.isNotBlank(),
                 utlsFingerprint = fp,
                 echConfigList = params["ech"] ?: "",
                 pinnedCA256 = params["pcs"] ?: params["pinSHA256"] ?: "",
+                verifyPeerCertByName = params["vcn"] ?: "",
+                mldsa65Verify = params["pqv"] ?: "",
             ),
         )
     }
@@ -750,8 +759,19 @@ object ShareLinkParser {
     // ------------------------------------------------------- custom / xray / sing-box json
 
     private fun parseJsonArray(json: String): List<Profile> {
-        val parsed = Json.parse(json) as? List<*> ?: return emptyList()
         val result = mutableListOf<Profile>()
+        val elements = runCatching {
+            com.google.gson.JsonParser.parseString(json).asJsonArray
+        }.getOrNull()
+        if (elements != null) {
+            for (el in elements) {
+                if (!el.isJsonObject) continue
+                val itemJson = com.v2ray.ang.util.JsonUtil.toJsonPretty(el.asJsonObject) ?: el.toString()
+                runCatching { result.addAll(parseJsonDocument(itemJson)) }
+            }
+            if (result.isNotEmpty()) return result
+        }
+        val parsed = Json.parse(json) as? List<*> ?: return emptyList()
         for (item in parsed) {
             val map = item as? Map<*, *> ?: continue
             val itemJson = Json.any(map)
@@ -765,25 +785,40 @@ object ShareLinkParser {
         val root = Json.miniMap(trimmed)
         if (root.isEmpty()) throw ParseException("invalid JSON document")
 
-        @Suppress("UNCHECKED_CAST")
-        val outbounds = root["outbounds"] as? List<Map<String, Any?>>
-
-        // If this is a standard Xray / v2rayNG config without custom balancers/multiple proxy outbounds,
-        // extract a clean Profile or keep full Custom JSON if it has custom routing/fragment/multiple outbounds
-        if (outbounds != null && outbounds.any { it.containsKey("protocol") && it.containsKey("settings") }) {
-            val proxyOutbounds = outbounds.filter {
-                val p = it["protocol"]?.toString()?.lowercase() ?: ""
-                p in setOf("vless", "vmess", "trojan", "shadowsocks", "socks", "http", "wireguard", "hysteria", "hysteria2")
-            }
-            if (proxyOutbounds.size == 1 && !root.containsKey("observatory") && !root.containsKey("burstObservatory")) {
-                val xrayProfile = runCatching { parseXrayJson(root, proxyOutbounds) }.getOrNull()
-                if (xrayProfile != null) {
-                    // Also preserve the raw custom JSON in case user wants to view/edit it
-                    return listOf(xrayProfile)
+        // Matches v2rayNG 2.3.10 CustomFmt.parse + AngConfigManager.parseCustomConfigServer:
+        // Always store imported JSON configs as Protocol.CUSTOM with the full raw JSON preserved,
+        // so custom inbounds (mixed-in/dns-in), outbounds (fragment/warp/proxy), finalmask, ECH,
+        // dns.hosts, and routing rules are never stripped.
+        val v2rayConfig = com.v2ray.ang.util.JsonUtil.fromJsonSafe(
+            trimmed,
+            com.v2ray.ang.dto.V2rayConfig::class.java,
+        )
+        val proxyOutbound = v2rayConfig?.getProxyOutbound()
+        if (proxyOutbound != null) {
+            val srvAddr = proxyOutbound.getServerAddress().orEmpty()
+            val srvPort = proxyOutbound.getServerPort() ?: 0
+            val remarks = v2rayConfig.remarks
+                ?.takeIf { it.isNotBlank() }
+                ?: proxyOutbound.tag.takeIf { it !in setOf("proxy", "out", "direct") }
+                ?: if (srvAddr.isNotBlank()) {
+                    if (srvPort > 0) "$srvAddr:$srvPort" else srvAddr
+                } else {
+                    System.currentTimeMillis().toString()
                 }
-            }
+            return listOf(
+                Profile(
+                    id = newId(),
+                    name = remarks,
+                    protocol = Protocol.CUSTOM,
+                    server = srvAddr,
+                    serverPort = srvPort,
+                    customConfig = trimmed,
+                ),
+            )
         }
 
+        @Suppress("UNCHECKED_CAST")
+        val outbounds = root["outbounds"] as? List<Map<String, Any?>>
         val ignoredTypes = setOf("direct", "freedom", "block", "blackhole", "dns", "selector", "urltest")
         val primaryOutbound: Map<String, Any?>? = when {
             outbounds != null -> outbounds.firstOrNull {
@@ -1055,7 +1090,7 @@ object ShareLinkParser {
     }
 
     private fun decode(value: String): String = runCatching {
-        URLDecoder.decode(value, "UTF-8")
+        URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
     }.getOrDefault(value)
 
     internal fun encode(value: String): String =

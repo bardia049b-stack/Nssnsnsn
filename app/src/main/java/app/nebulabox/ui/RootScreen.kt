@@ -1,5 +1,6 @@
 package app.nebulabox.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,15 +14,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.FolderSpecial
-import androidx.compose.material.icons.filled.Route
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Badge
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,7 +45,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -78,10 +72,7 @@ private object Route {
 }
 
 /**
- * Root navigation modeled directly on `v2rayNG 2.3.10` (`MainScreen.kt` + `MainDrawer.kt`):
- *  - Main screen is the unified Server List (`ProfilesScreen`) with `MainTopBar` and `MainBottomBar`
- *  - Left slide-out `ModalNavigationDrawer` provides instant access to Subscriptions, Per-App Proxy,
- *    Routing, Settings, and Logcat
+ * Root navigation modeled directly on `v2rayNG 2.3.10` (`MainScreen.kt` + `MainDrawer.kt`).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -132,7 +123,7 @@ fun RootScreen(
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                 ) {
-                    // Drawer header (exact v2rayNG MainDrawerContent style)
+                    // Exact v2rayNG 2.3.10 MainDrawerContent Header
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -142,22 +133,17 @@ fun RootScreen(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(16.dp),
+                                .padding(8.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,
                         ) {
-                            Icon(
-                                imageVector = Icons.Filled.Shield,
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_launcher_foreground),
                                 contentDescription = null,
-                                tint = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.size(64.dp),
+                                modifier = Modifier.size(72.dp),
+                                contentScale = ContentScale.Crop,
                             )
-                            Spacer(Modifier.height(10.dp))
-                            Text(
-                                text = stringResource(R.string.app_name),
-                                style = MaterialTheme.typography.titleLarge,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            )
+                            Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = viewModel.activeEngine?.implementationName ?: "Xray-core",
                                 style = MaterialTheme.typography.bodySmall,
@@ -176,7 +162,12 @@ fun RootScreen(
                             scope.launch { drawerState.close() }
                             navController.goTo(Route.SERVERS)
                         },
-                        icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = null) },
+                        icon = {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_qu_switch_24dp),
+                                contentDescription = null,
+                            )
+                        },
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                     )
 
@@ -188,7 +179,12 @@ fun RootScreen(
                             navController.goTo(Route.SERVERS)
                             openSubscriptionsModal = true
                         },
-                        icon = { Icon(Icons.Filled.FolderSpecial, contentDescription = null) },
+                        icon = {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_subscriptions_24dp),
+                                contentDescription = null,
+                            )
+                        },
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                     )
 
@@ -199,18 +195,28 @@ fun RootScreen(
                             scope.launch { drawerState.close() }
                             navController.goTo(Route.SETTINGS)
                         },
-                        icon = { Icon(Icons.Filled.Apps, contentDescription = null) },
+                        icon = {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_per_apps_24dp),
+                                contentDescription = null,
+                            )
+                        },
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                     )
 
                     NavigationDrawerItem(
-                        label = { Text("Routing & Fragment setting") },
+                        label = { Text("Routing setting") },
                         selected = false,
                         onClick = {
                             scope.launch { drawerState.close() }
                             navController.goTo(Route.SETTINGS)
                         },
-                        icon = { Icon(Icons.Filled.Route, contentDescription = null) },
+                        icon = {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_routing_24dp),
+                                contentDescription = null,
+                            )
+                        },
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                     )
 
@@ -221,7 +227,12 @@ fun RootScreen(
                             scope.launch { drawerState.close() }
                             navController.goTo(Route.SETTINGS)
                         },
-                        icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+                        icon = {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_settings_24dp),
+                                contentDescription = null,
+                            )
+                        },
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                     )
 
@@ -232,7 +243,7 @@ fun RootScreen(
                     NavigationDrawerItem(
                         label = {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("Logcat & Crash Center")
+                                Text("Logcat")
                                 if (crashes.isNotEmpty()) {
                                     Spacer(Modifier.width(8.dp))
                                     Badge(containerColor = MaterialTheme.colorScheme.error) {
@@ -246,7 +257,12 @@ fun RootScreen(
                             scope.launch { drawerState.close() }
                             navController.goTo(Route.LOGS)
                         },
-                        icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
+                        icon = {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_logcat_24dp),
+                                contentDescription = null,
+                            )
+                        },
                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
                     )
                 }
@@ -334,7 +350,10 @@ private fun SubScreenScaffold(
             title = { Text(title) },
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_arrow_back_24dp),
+                        contentDescription = "Back",
+                    )
                 }
             },
             colors = TopAppBarDefaults.topAppBarColors(

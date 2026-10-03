@@ -10,6 +10,7 @@ import app.nebulabox.config.ConfigBuilder
 import app.nebulabox.data.AppSettings
 import app.nebulabox.data.Profile
 import app.nebulabox.data.ProfileStore
+import app.nebulabox.data.Protocol
 import app.nebulabox.data.SettingsStore
 import app.nebulabox.data.SubscriptionItem
 import app.nebulabox.engine.Engines
@@ -40,7 +41,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
@@ -87,6 +90,9 @@ class NebulaViewModel(
     private val _activeDelayMs = MutableStateFlow<Long?>(null)
     val activeDelayMs: StateFlow<Long?> = _activeDelayMs.asStateFlow()
 
+    private val _activeTestError = MutableStateFlow<String?>(null)
+    val activeTestError: StateFlow<String?> = _activeTestError.asStateFlow()
+
     private val _testingProgress = MutableStateFlow<Pair<Int, Int>?>(null)
     val testingProgress: StateFlow<Pair<Int, Int>?> = _testingProgress.asStateFlow()
 
@@ -95,6 +101,13 @@ class NebulaViewModel(
 
     private val _updatingSubscriptions = MutableStateFlow(false)
     val updatingSubscriptions: StateFlow<Boolean> = _updatingSubscriptions.asStateFlow()
+
+    /** Matches v2rayNG 2.3.10 `BaseViewModel.isLoading` — only true during short user actions. */
+    private val _isLoading = MutableStateFlow(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    /** Matches v2rayNG 2.3.10 `RealPingExecutionLimiter` for Custom JSON configs. */
+    private val customConfigPingMutex = Mutex()
 
     private var locationJob: Job? = null
     private var batchTestJob: Job? = null
@@ -113,7 +126,6 @@ class NebulaViewModel(
     private val pendingConnectId = MutableStateFlow<String?>(null)
 
     init {
-        // Ensure engine is initialized early
         Engines.obtain()
 
         viewModelScope.launch {
@@ -122,19 +134,22 @@ class NebulaViewModel(
                 .collect { logs.emit(it) }
         }
 
-        // Automatically query connected Exit IP & Country + Real Delay when tunnel state becomes STARTED.
+        // Automatically query connected Exit IP & Country in the background when tunnel state becomes STARTED.
+        // Never sets _isLoading so the top progress bar never gets stuck.
         viewModelScope.launch {
             status
                 .map { it.state }
                 .distinctUntilChanged()
                 .collect { state ->
                     if (state == TunnelState.STARTED) {
-                        fetchExitLocationWithRetry()
+                        _activeTestError.value = null
+                        fetchExitLocationQuietly()
                     } else {
                         locationJob?.cancel()
                         _checkingLocation.value = false
                         _endpointLocation.value = null
                         _activeDelayMs.value = null
+                        _activeTestError.value = null
                     }
                 }
         }
@@ -148,16 +163,26 @@ class NebulaViewModel(
         viewModelScope.launch { snack.emit(message) }
     }
 
+    private fun launchLoading(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            try {
+                block()
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
     // ----------------------------------------------------------- location & active delay test
 
     fun refreshLocation() {
         if (status.value.state != TunnelState.STARTED) return
-        fetchExitLocationWithRetry(initialDelayMs = 0L)
+        testActiveConnectionDelay()
     }
 
     /**
-     * Tests the currently active tunnel's real HTTP 204 latency via `CoreController.measureDelay`
-     * (matching v2rayNG's bottom-bar tap `measureV2rayDelay`) and refreshes Exit IP/Country.
+     * Matches v2rayNG 2.3.10's bottom-bar tap (`TestCurrentServer` -> `testCurrentServerRealPing` + `getRemoteIPInfo`).
      */
     fun testActiveConnectionDelay() {
         val currentSettings = settings.value.normalized()
@@ -175,91 +200,127 @@ class NebulaViewModel(
         locationJob?.cancel()
         locationJob = viewModelScope.launch(Dispatchers.IO) {
             _checkingLocation.value = true
-            val engine = Engines.obtain()
-            val url1 = currentSettings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" }
-            var delayMs = engine.measureActiveDelay(url1)
-            if (delayMs <= 0L) {
-                delayMs = engine.measureActiveDelay("https://www.google.com/generate_204")
-            }
-            if (delayMs > 0L) {
-                _activeDelayMs.value = delayMs
-                if (selected != null) {
-                    profileStore.updateDelays(mapOf(selected.id to delayMs.toInt()))
-                }
-            }
+            _activeTestError.value = null
+            try {
+                val engine = Engines.obtain()
+                val url = currentSettings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" }
 
-            val loc = IpLocationChecker.fetchLocation(currentSettings.socksPort)
-            if (loc != null) {
-                val mergedLoc = if (delayMs > 0L) loc.copy(delayMs = delayMs) else loc
-                _endpointLocation.value = mergedLoc
-                snack.emit("Connected: ${mergedLoc.flagEmoji} ${mergedLoc.countryName} · ${mergedLoc.delayMs} ms")
-            } else if (delayMs > 0L) {
-                snack.emit("Real delay: $delayMs ms")
-            } else {
-                snack.emit("Delay test failed (-1 ms)")
+                val (delayMs, loc) = coroutineScope {
+                    val delayDeferred = async { engine.measureActiveDelay(url) }
+                    val locDeferred = async { IpLocationChecker.fetchLocation(currentSettings.socksPort) }
+                    delayDeferred.await() to locDeferred.await()
+                }
+
+                if (delayMs > 0L) {
+                    _activeDelayMs.value = delayMs
+                    _activeTestError.value = null
+                    if (selected != null) {
+                        profileStore.updateDelays(mapOf(selected.id to delayMs.toInt()))
+                    }
+                } else if (loc != null && loc.delayMs > 0L) {
+                    _activeDelayMs.value = loc.delayMs
+                    _activeTestError.value = null
+                    if (selected != null) {
+                        profileStore.updateDelays(mapOf(selected.id to loc.delayMs.toInt()))
+                    }
+                } else {
+                    _activeDelayMs.value = -1L
+                    _activeTestError.value = "Timeout"
+                }
+
+                if (loc != null) {
+                    val finalDelay = if (delayMs > 0L) delayMs else loc.delayMs
+                    _endpointLocation.value = loc.copy(delayMs = finalDelay)
+                }
+            } finally {
+                _checkingLocation.value = false
             }
-            _checkingLocation.value = false
         }
     }
 
-    private fun fetchExitLocationWithRetry(initialDelayMs: Long = 600L) {
+    private fun fetchExitLocationQuietly() {
         locationJob?.cancel()
         locationJob = viewModelScope.launch(Dispatchers.IO) {
-            _checkingLocation.value = true
-            if (initialDelayMs > 0) delay(initialDelayMs)
+            delay(800L)
+            if (status.value.state != TunnelState.STARTED) return@launch
             val currentSettings = settingsStore.current().normalized()
             val engine = Engines.obtain()
+            val url = currentSettings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" }
 
-            val d = engine.measureActiveDelay(currentSettings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" })
-            if (d > 0L) {
-                _activeDelayMs.value = d
+            val (delayMs, loc) = coroutineScope {
+                val delayDeferred = async { engine.measureActiveDelay(url) }
+                val locDeferred = async { IpLocationChecker.fetchLocation(currentSettings.socksPort) }
+                delayDeferred.await() to locDeferred.await()
+            }
+
+            if (status.value.state != TunnelState.STARTED) return@launch
+
+            if (delayMs > 0L) {
+                _activeDelayMs.value = delayMs
                 currentSettings.selectedProfileId?.let { id ->
-                    profileStore.updateDelays(mapOf(id to d.toInt()))
+                    profileStore.updateDelays(mapOf(id to delayMs.toInt()))
                 }
             }
-
-            for (attempt in 1..3) {
-                if (status.value.state != TunnelState.STARTED) break
-                val loc = IpLocationChecker.fetchLocation(currentSettings.socksPort)
-                if (loc != null) {
-                    val finalLoc = if (d > 0L) loc.copy(delayMs = d) else loc
-                    _endpointLocation.value = finalLoc
-                    AppLogger.i("GeoIP", "Connected exit IP: ${finalLoc.ip} (${finalLoc.flagEmoji} ${finalLoc.countryName}, ${finalLoc.delayMs} ms)")
-                    break
+            if (loc != null) {
+                val finalDelay = if (delayMs > 0L) delayMs else loc.delayMs
+                if (_activeDelayMs.value == null && finalDelay > 0L) {
+                    _activeDelayMs.value = finalDelay
                 }
-                delay(1200L)
+                _endpointLocation.value = loc.copy(delayMs = finalDelay)
+                AppLogger.i("GeoIP", "Connected exit IP: ${loc.ip} (${loc.flagEmoji} ${loc.countryName}, ${finalDelay} ms)")
             }
-            _checkingLocation.value = false
         }
     }
 
-    // ----------------------------------------------------------- real ping & tcp ping (v2rayNG parity)
+    // ----------------------------------------------------------- real ping & tcp ping (v2rayNG 2.3.10)
 
     /**
-     * Tests a single profile's real HTTP 204 latency using `Libv2ray.measureOutboundDelay`
-     * (works whether VPN is connected or disconnected!).
+     * Exact port of `v2rayNG 2.3.10` `RealPingWorkerService.startRealPing`:
+     *  1. Fast 1000ms TCP connect pre-check for non-Custom, non-Hysteria2, non-WireGuard profiles.
+     *  2. Builds config via `ConfigBuilder.buildForSpeedtest`.
+     *  3. Serializes `Protocol.CUSTOM` measurements via `customConfigPingMutex`.
+     *  4. Measures HTTP 204 latency via `Libv2ray.measureOutboundDelay`.
      */
+    private suspend fun runSingleRealPing(profile: Profile, settings: AppSettings): Int {
+        if (profile.protocol != Protocol.CUSTOM &&
+            profile.protocol != Protocol.HYSTERIA2 &&
+            profile.protocol != Protocol.TUIC &&
+            profile.protocol != Protocol.WIREGUARD &&
+            profile.tls.alpn.firstOrNull()?.startsWith("h3") != true &&
+            profile.server.isNotBlank() &&
+            profile.serverPort > 0
+        ) {
+            val tcpTime = socketConnectTime(profile.server, profile.serverPort, 1500)
+            if (tcpTime <= -1) {
+                return -1
+            }
+        }
+
+        val config = runCatching { ConfigBuilder.buildForSpeedtest(profile, settings) }.getOrNull()
+            ?: return -1
+        val testUrl = settings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" }
+        val engine = Engines.obtain()
+        val delayMs = if (profile.protocol == Protocol.CUSTOM) {
+            customConfigPingMutex.withLock {
+                engine.measureOutboundDelay(config, testUrl)
+            }
+        } else {
+            engine.measureOutboundDelay(config, testUrl)
+        }
+        return if (delayMs > 0L) delayMs.toInt() else -1
+    }
+
     fun testSingleProfileRealPing(profile: Profile) {
         viewModelScope.launch(Dispatchers.IO) {
             _testingProfileIds.value = _testingProfileIds.value + profile.id
             try {
                 val currentSettings = settingsStore.current().normalized()
-                val testUrl = currentSettings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" }
-                val config = runCatching { ConfigBuilder.buildForSpeedtest(profile, currentSettings) }.getOrNull()
-                val delayMs = if (config != null) {
-                    var res = Engines.obtain().measureOutboundDelay(config, testUrl)
-                    if (res <= 0L) {
-                        res = Engines.obtain().measureOutboundDelay(config, "https://cp.cloudflare.com/generate_204")
-                    }
-                    res.toInt()
-                } else {
-                    -1
-                }
+                val delayMs = runSingleRealPing(profile, currentSettings)
                 profileStore.updateDelays(mapOf(profile.id to delayMs))
                 if (delayMs > 0) {
                     snack.emit("${profile.displayName}: $delayMs ms")
                 } else {
-                    snack.emit("${profile.displayName}: Timeout (-1 ms)")
+                    snack.emit("${profile.displayName}: -1 ms")
                 }
             } finally {
                 _testingProfileIds.value = _testingProfileIds.value - profile.id
@@ -267,16 +328,19 @@ class NebulaViewModel(
         }
     }
 
+    fun cancelAllPing() {
+        batchTestJob?.cancel()
+        batchTestJob = null
+        _testingProgress.value = null
+        _testingProfileIds.value = emptySet()
+    }
+
     /**
-     * Batch Real Ping (`TestAllRealPing` in v2rayNG): tests all profiles in the current subscription group
-     * concurrently using `Libv2ray.measureOutboundDelay`.
+     * Batch Real Ping (`TestRealAllServers` in v2rayNG 2.3.10).
      */
     fun testAllRealPing() {
         if (_testingProgress.value != null) {
-            batchTestJob?.cancel()
-            _testingProgress.value = null
-            _testingProfileIds.value = emptySet()
-            showSnack("Ping test cancelled")
+            cancelAllPing()
             return
         }
 
@@ -293,10 +357,9 @@ class NebulaViewModel(
 
             val total = targetList.size
             var completed = 0
-            var successCount = 0
             _testingProgress.value = 0 to total
-            val testUrl = currentSettings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" }
-            val engine = Engines.obtain()
+            // Clear previous test results to 0 ("") before running batch test, matching v2rayNG 2.3.10
+            profileStore.clearTestDelays(targetList.mapTo(HashSet()) { it.id })
             val semaphore = Semaphore(6)
 
             try {
@@ -306,12 +369,7 @@ class NebulaViewModel(
                             semaphore.withPermit {
                                 _testingProfileIds.value = _testingProfileIds.value + profile.id
                                 val delayMs = try {
-                                    val config = ConfigBuilder.buildForSpeedtest(profile, currentSettings)
-                                    var d = engine.measureOutboundDelay(config, testUrl)
-                                    if (d <= 0L) {
-                                        d = engine.measureOutboundDelay(config, "https://cp.cloudflare.com/generate_204")
-                                    }
-                                    d.toInt()
+                                    runSingleRealPing(profile, currentSettings)
                                 } catch (_: Throwable) {
                                     -1
                                 } finally {
@@ -321,14 +379,12 @@ class NebulaViewModel(
                                 profileStore.updateDelays(mapOf(profile.id to delayMs))
                                 synchronized(this@NebulaViewModel) {
                                     completed++
-                                    if (delayMs > 0) successCount++
                                     _testingProgress.value = completed to total
                                 }
                             }
                         }
                     }.awaitAll()
                 }
-                snack.emit("Real ping finished: $successCount / $total reachable")
             } finally {
                 _testingProgress.value = null
                 _testingProfileIds.value = emptySet()
@@ -337,13 +393,11 @@ class NebulaViewModel(
     }
 
     /**
-     * Batch TCP Ping (`TestAll` in v2rayNG): fast TCP socket connect handshake time across all profiles.
+     * Batch TCP Ping (`TestAllServers` in v2rayNG 2.3.10).
      */
     fun testAllTcpPing() {
         if (_testingProgress.value != null) {
-            batchTestJob?.cancel()
-            _testingProgress.value = null
-            _testingProfileIds.value = emptySet()
+            cancelAllPing()
             return
         }
 
@@ -357,8 +411,8 @@ class NebulaViewModel(
 
             val total = targetList.size
             var completed = 0
-            var successCount = 0
             _testingProgress.value = 0 to total
+            profileStore.clearTestDelays(targetList.mapTo(HashSet()) { it.id })
             val semaphore = Semaphore(12)
 
             try {
@@ -367,8 +421,13 @@ class NebulaViewModel(
                         async {
                             semaphore.withPermit {
                                 _testingProfileIds.value = _testingProfileIds.value + profile.id
-                                val delayMs = if (profile.server.isNotBlank() && profile.serverPort > 0) {
-                                    socketConnectTime(profile.server, profile.serverPort, 2500)
+                                val delayMs = if (profile.protocol != Protocol.CUSTOM &&
+                                    profile.protocol != Protocol.HYSTERIA2 &&
+                                    profile.protocol != Protocol.WIREGUARD &&
+                                    profile.server.isNotBlank() &&
+                                    profile.serverPort > 0
+                                ) {
+                                    socketConnectTime(profile.server, profile.serverPort, 1500)
                                 } else {
                                     -1
                                 }
@@ -376,14 +435,12 @@ class NebulaViewModel(
                                 profileStore.updateDelays(mapOf(profile.id to delayMs))
                                 synchronized(this@NebulaViewModel) {
                                     completed++
-                                    if (delayMs > 0) successCount++
                                     _testingProgress.value = completed to total
                                 }
                             }
                         }
                     }.awaitAll()
                 }
-                snack.emit("TCP ping finished: $successCount / $total reachable")
             } finally {
                 _testingProgress.value = null
                 _testingProfileIds.value = emptySet()
@@ -391,7 +448,7 @@ class NebulaViewModel(
         }
     }
 
-    private fun socketConnectTime(host: String, port: Int, timeoutMs: Int = 2000): Int {
+    private fun socketConnectTime(host: String, port: Int, timeoutMs: Int = 1500): Int {
         var socket: Socket? = null
         val start = System.currentTimeMillis()
         return try {
@@ -447,7 +504,7 @@ class NebulaViewModel(
                 delay(450L)
             }
             Actions.connect(application, selectedId)
-            snack.emit("Restarting Xray-core service…")
+            snack.emit("Restarting service…")
         }
     }
 
@@ -464,7 +521,6 @@ class NebulaViewModel(
             val wasConnected = status.value.state == TunnelState.STARTED
             settingsStore.update { it.copy(selectedProfileId = profile.id) }
             if (wasConnected) {
-                // Just like v2rayNG: selecting a new server while connected hot-switches to it
                 Actions.connect(application, profile.id)
             }
         }
@@ -491,40 +547,50 @@ class NebulaViewModel(
     }
 
     fun sortByTestResults() {
-        viewModelScope.launch {
-            profileStore.sortByTestResults()
-            snack.emit("Sorted profiles by latency")
+        launchLoading {
+            withContext(Dispatchers.IO) {
+                profileStore.sortByTestResults()
+            }
+            snack.emit("Sorted by test results")
         }
     }
 
     fun removeDuplicateProfiles() {
-        viewModelScope.launch {
-            val count = profileStore.removeDuplicates()
-            snack.emit("Removed $count duplicate profile(s)")
+        launchLoading {
+            val count = withContext(Dispatchers.IO) {
+                profileStore.removeDuplicates()
+            }
+            snack.emit("Removed $count duplicate configuration(s)")
         }
     }
 
     fun removeInvalidProfiles() {
-        viewModelScope.launch {
-            val count = profileStore.removeInvalid()
-            snack.emit("Removed $count invalid/timed-out profile(s)")
+        launchLoading {
+            val count = withContext(Dispatchers.IO) {
+                profileStore.removeInvalid()
+            }
+            snack.emit("Removed $count invalid configuration(s)")
         }
     }
 
     fun deleteAllProfiles() {
-        viewModelScope.launch {
-            profileStore.clear()
-            snack.emit("All profiles deleted")
+        launchLoading {
+            withContext(Dispatchers.IO) {
+                profileStore.clear()
+            }
+            snack.emit("All configurations removed")
         }
     }
 
     fun exportAllShareLinks(callback: (String) -> Unit) {
-        viewModelScope.launch {
-            val subFilter = settings.value.selectedSubscriptionId
-            val list = profileStore.all().filter {
-                subFilter.isBlank() || it.subscriptionId == subFilter
+        launchLoading {
+            val text = withContext(Dispatchers.IO) {
+                val subFilter = settings.value.selectedSubscriptionId
+                val list = profileStore.all().filter {
+                    (subFilter.isBlank() || it.subscriptionId == subFilter) && it.protocol != Protocol.CUSTOM
+                }
+                list.joinToString("\n") { ShareLinkParser.toShareUri(it) }
             }
-            val text = list.joinToString("\n") { ShareLinkParser.toShareUri(it) }
             callback(text)
         }
     }
@@ -532,20 +598,24 @@ class NebulaViewModel(
     /** Immediately parses and imports links or Custom JSON text. */
     fun submitImportText(text: String) {
         if (text.isBlank()) return
-        viewModelScope.launch {
-            importTextInternal(text)
+        launchLoading {
+            withContext(Dispatchers.IO) {
+                importTextInternal(text)
+            }
         }
     }
 
     suspend fun consumePendingImport() {
         val text = pendingImport.value ?: return
         pendingImport.value = null
-        importTextInternal(text)
+        withContext(Dispatchers.IO) {
+            importTextInternal(text)
+        }
     }
 
     private suspend fun importTextInternal(text: String) {
         val trimmed = text.trim()
-        // If user pasted a single http(s) subscription URL that doesn't have userInfo, offer to import as subscription
+        // If user pasted a single http(s) subscription URL that doesn't have userInfo, import as subscription
         if ((trimmed.startsWith("https://", true) || trimmed.startsWith("http://", true)) &&
             !trimmed.contains("\n") && !trimmed.substringAfter("://").substringBefore("/").contains("@")
         ) {
@@ -574,7 +644,10 @@ class NebulaViewModel(
 
         val currentSubId = settingsStore.current().selectedSubscriptionId
         val parsed = runCatching { ShareLinkParser.parseMany(text) }.getOrDefault(emptyList())
-            .map { if (currentSubId.isNotBlank()) it.copy(subscriptionId = currentSubId) else it }
+            .map {
+                val withSub = if (currentSubId.isNotBlank()) it.copy(subscriptionId = currentSubId) else it
+                withSub.copy(lastDelayMs = 0, lastTestedAt = 0L)
+            }
         if (parsed.isEmpty()) {
             importResult.emit(ImportResult(0, text))
             return
@@ -606,31 +679,33 @@ class NebulaViewModel(
         val name = remarks.trim().ifBlank {
             runCatching { URL(cleanUrl).host }.getOrDefault("Subscription")
         }
-        viewModelScope.launch(Dispatchers.IO) {
+        launchLoading {
             _updatingSubscriptions.value = true
             try {
-                val sub = SubscriptionItem(
-                    id = subId,
-                    remarks = name,
-                    url = cleanUrl,
-                    enabled = true,
-                    updatedAt = System.currentTimeMillis(),
-                )
-                profileStore.upsertSubscription(sub)
-                val body = fetchUrlContent(cleanUrl)
-                if (body.isNullOrBlank()) {
-                    snack.emit("Saved subscription '$name', but failed to fetch URL")
-                    return@launch
-                }
-                val parsed = runCatching { ShareLinkParser.parseMany(body) }.getOrDefault(emptyList())
-                if (parsed.isNotEmpty()) {
-                    profileStore.replaceSubscriptionProfiles(sub.id, sub.url, parsed)
-                    if (settingsStore.current().selectedProfileId.isNullOrBlank()) {
-                        settingsStore.update { it.copy(selectedProfileId = parsed.first().id) }
+                withContext(Dispatchers.IO) {
+                    val sub = SubscriptionItem(
+                        id = subId,
+                        remarks = name,
+                        url = cleanUrl,
+                        enabled = true,
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                    profileStore.upsertSubscription(sub)
+                    val body = fetchUrlContent(cleanUrl)
+                    if (body.isNullOrBlank()) {
+                        snack.emit("Saved subscription '$name', but failed to fetch URL")
+                        return@withContext
                     }
-                    snack.emit("Subscription '$name': imported ${parsed.size} profile(s)")
-                } else {
-                    snack.emit("Subscription '$name' returned 0 valid profiles")
+                    val parsed = runCatching { ShareLinkParser.parseMany(body) }.getOrDefault(emptyList())
+                    if (parsed.isNotEmpty()) {
+                        profileStore.replaceSubscriptionProfiles(sub.id, sub.url, parsed)
+                        if (settingsStore.current().selectedProfileId.isNullOrBlank()) {
+                            settingsStore.update { it.copy(selectedProfileId = parsed.first().id) }
+                        }
+                        snack.emit("Subscription '$name': imported ${parsed.size} configuration(s)")
+                    } else {
+                        snack.emit("Subscription '$name' returned 0 valid configurations")
+                    }
                 }
             } finally {
                 _updatingSubscriptions.value = false
@@ -640,27 +715,29 @@ class NebulaViewModel(
 
     fun updateAllSubscriptions() {
         if (_updatingSubscriptions.value) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val subs = profileStore.allSubscriptions().filter { it.enabled }
-            if (subs.isEmpty()) {
-                snack.emit("No subscriptions configured. Add a subscription URL first.")
-                return@launch
-            }
+        launchLoading {
             _updatingSubscriptions.value = true
-            var updatedSubs = 0
-            var totalProfiles = 0
             try {
-                for (sub in subs) {
-                    val body = fetchUrlContent(sub.url) ?: continue
-                    val parsed = runCatching { ShareLinkParser.parseMany(body) }.getOrDefault(emptyList())
-                    if (parsed.isNotEmpty()) {
-                        profileStore.replaceSubscriptionProfiles(sub.id, sub.url, parsed)
-                        profileStore.upsertSubscription(sub.copy(updatedAt = System.currentTimeMillis()))
-                        updatedSubs++
-                        totalProfiles += parsed.size
+                withContext(Dispatchers.IO) {
+                    val subs = profileStore.allSubscriptions().filter { it.enabled }
+                    if (subs.isEmpty()) {
+                        snack.emit("No subscriptions configured")
+                        return@withContext
                     }
+                    var updatedSubs = 0
+                    var totalProfiles = 0
+                    for (sub in subs) {
+                        val body = fetchUrlContent(sub.url) ?: continue
+                        val parsed = runCatching { ShareLinkParser.parseMany(body) }.getOrDefault(emptyList())
+                        if (parsed.isNotEmpty()) {
+                            profileStore.replaceSubscriptionProfiles(sub.id, sub.url, parsed)
+                            profileStore.upsertSubscription(sub.copy(updatedAt = System.currentTimeMillis()))
+                            updatedSubs++
+                            totalProfiles += parsed.size
+                        }
+                    }
+                    snack.emit("Updated $updatedSubs/${subs.size} subscription(s) ($totalProfiles configurations)")
                 }
-                snack.emit("Updated $updatedSubs/${subs.size} subscription(s) ($totalProfiles profiles)")
             } finally {
                 _updatingSubscriptions.value = false
             }
@@ -678,7 +755,6 @@ class NebulaViewModel(
     }
 
     private suspend fun fetchUrlContent(urlStr: String): String? = withContext(Dispatchers.IO) {
-        // Try through local proxy first if tunnel is running, then fall back to direct connection
         val currentSettings = settingsStore.current().normalized()
         if (status.value.state == TunnelState.STARTED) {
             val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", currentSettings.socksPort))

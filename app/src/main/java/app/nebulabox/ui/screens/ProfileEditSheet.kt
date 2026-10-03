@@ -388,10 +388,10 @@ fun ProfileEditSheet(
                     )
                     SimpleDropdown(
                         label = "uTLS Fingerprint",
-                        value = profile.tls.utlsFingerprint.ifBlank { "chrome" },
-                        options = listOf("chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random", "randomized"),
+                        value = profile.tls.utlsFingerprint,
+                        options = listOf("", "chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random", "randomized"),
                         onSelect = {
-                            profile = profile.copy(tls = profile.tls.copy(utls = true, utlsFingerprint = it))
+                            profile = profile.copy(tls = profile.tls.copy(utls = it.isNotEmpty(), utlsFingerprint = it))
                         },
                     )
                     OutlinedTextField(
@@ -402,6 +402,20 @@ fun ProfileEditSheet(
                             profile = profile.copy(tls = profile.tls.copy(alpn = list))
                         },
                         label = { Text("ALPN (e.g. h2,http/1.1 or h3)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = profile.finalMask,
+                        onValueChange = { profile = profile.copy(finalMask = it) },
+                        label = { Text("FinalMask JSON (fm)") },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                    )
+                    OutlinedTextField(
+                        value = profile.echConfigList,
+                        onValueChange = { profile = profile.copy(echConfigList = it) },
+                        label = { Text("ECH Config List (ech)") },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )

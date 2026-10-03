@@ -215,6 +215,12 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
             onExpandedChange = { dnsExpanded = it },
         )
         if (dnsExpanded) {
+            SettingsSwitchItem(
+                title = "Enable Local DNS",
+                summary = "Intercept port 53 to Xray dns-out (v2rayNG default: off)",
+                checked = s.localDnsEnabled,
+                onCheckedChange = { v -> viewModel.updateSettings { it.copy(localDnsEnabled = v) } },
+            )
             SettingsEditItem(
                 title = "Remote DNS",
                 value = s.remoteDns,

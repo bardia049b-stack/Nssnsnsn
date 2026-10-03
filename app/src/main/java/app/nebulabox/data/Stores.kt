@@ -27,7 +27,12 @@ class ProfileStore(private val context: Context) {
 
     val profiles: Flow<List<Profile>> = context.profileStore.data.map { prefs ->
         val raw = prefs[PROFILES_KEY] ?: return@map emptyList()
-        runCatching { kjson.decodeFromString(profileListSerializer, raw) }.getOrDefault(emptyList())
+        runCatching { kjson.decodeFromString(profileListSerializer, raw) }
+            .getOrDefault(emptyList())
+            .map { p ->
+                // Normalize any untested profile that had legacy default -1 so it displays "" instead of "-1 ms"
+                if (p.lastTestedAt == 0L && p.lastDelayMs < 0) p.copy(lastDelayMs = 0) else p
+            }
     }
 
     val subscriptions: Flow<List<SubscriptionItem>> = context.profileStore.data.map { prefs ->
@@ -79,19 +84,30 @@ class ProfileStore(private val context: Context) {
                 subscriptionId = subId,
                 subscriptionUrl = subUrl,
                 order = baseOrder + index + 1,
+                lastDelayMs = 0,
+                lastTestedAt = 0L,
             )
         }
     }
 
     suspend fun upsert(profile: Profile) = write { list ->
-        val index = list.indexOfFirst { it.id == profile.id }
-        if (index >= 0) list.toMutableList().also { it[index] = profile } else list + profile
+        val normalized = if (profile.lastTestedAt == 0L && profile.lastDelayMs < 0) {
+            profile.copy(lastDelayMs = 0)
+        } else {
+            profile
+        }
+        val index = list.indexOfFirst { it.id == normalized.id }
+        if (index >= 0) list.toMutableList().also { it[index] = normalized } else list + normalized
     }
 
     suspend fun addAll(newProfiles: List<Profile>) = write { list ->
         val baseOrder = list.maxOfOrNull { it.order } ?: 0
         list + newProfiles.mapIndexed { index, profile ->
-            profile.copy(order = baseOrder + index + 1)
+            profile.copy(
+                order = baseOrder + index + 1,
+                lastDelayMs = 0,
+                lastTestedAt = 0L,
+            )
         }
     }
 
@@ -101,6 +117,12 @@ class ProfileStore(private val context: Context) {
 
     suspend fun update(id: String, transform: (Profile) -> Profile) = write { list ->
         list.map { if (it.id == id) transform(it) else it }
+    }
+
+    suspend fun clearTestDelays(ids: Set<String>) = write { list ->
+        list.map { p ->
+            if (p.id in ids) p.copy(lastDelayMs = 0, lastTestedAt = 0L) else p
+        }
     }
 
     suspend fun updateDelays(results: Map<String, Int>, testedAt: Long = System.currentTimeMillis()) = write { list ->
@@ -144,7 +166,7 @@ class ProfileStore(private val context: Context) {
     }
 
     /**
-     * Removes invalid/timed-out profiles (where lastDelayMs <= 0 after being tested),
+     * Removes invalid/timed-out profiles (where lastDelayMs < 0 after being tested),
      * matching v2rayNG's DeleteInvalid.
      * @return Number of invalid profiles removed.
      */
@@ -152,7 +174,7 @@ class ProfileStore(private val context: Context) {
         var removedCount = 0
         write { list ->
             val kept = list.filter { p ->
-                val isFailed = p.lastTestedAt > 0L && p.lastDelayMs <= 0
+                val isFailed = p.lastDelayMs < 0
                 if (isFailed) removedCount++
                 !isFailed
             }
@@ -182,6 +204,7 @@ class ProfileStore(private val context: Context) {
             val raw = prefs[PROFILES_KEY] ?: "[]"
             val current = runCatching { kjson.decodeFromString(profileListSerializer, raw) }
                 .getOrDefault(emptyList())
+                .map { p -> if (p.lastTestedAt == 0L && p.lastDelayMs < 0) p.copy(lastDelayMs = 0) else p }
             prefs[PROFILES_KEY] = kjson.encodeToString(profileListSerializer, transform(current))
         }
     }
