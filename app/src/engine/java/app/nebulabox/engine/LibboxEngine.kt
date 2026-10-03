@@ -214,15 +214,21 @@ class LibboxEngine : TunnelEngine {
                 delay(1000L)
                 if (!coreController.isRunning) break
 
-                var deltaUp = runCatching {
-                    coreController.queryStats("proxy", "uplink") +
-                        coreController.queryStats("direct", "uplink")
-                }.getOrDefault(0L).coerceAtLeast(0L)
-
-                var deltaDown = runCatching {
-                    coreController.queryStats("proxy", "downlink") +
-                        coreController.queryStats("direct", "downlink")
-                }.getOrDefault(0L).coerceAtLeast(0L)
+                var deltaUp = 0L
+                var deltaDown = 0L
+                val rawStats = runCatching { coreController.queryAllOutboundTrafficStats() }.getOrDefault("")
+                if (rawStats.isNotBlank()) {
+                    for (entry in rawStats.split(';')) {
+                        if (entry.isBlank()) continue
+                        val parts = entry.split(',')
+                        if (parts.size != 3) continue
+                        val dir = parts[1]
+                        val bytes = parts[2].toLongOrNull() ?: 0L
+                        if (bytes <= 0L) continue
+                        if (dir == "uplink") deltaUp += bytes
+                        else if (dir == "downlink") deltaDown += bytes
+                    }
+                }
 
                 if (deltaUp == 0L && deltaDown == 0L) {
                     val hevStats = TProxyService.getStats()

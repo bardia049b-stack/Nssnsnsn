@@ -68,6 +68,7 @@ import app.nebulabox.ui.screens.ProfileEditSheet
 import app.nebulabox.ui.screens.ProfilesScreen
 import app.nebulabox.ui.screens.SettingsScreen
 import app.nebulabox.util.AppLogger
+import app.nebulabox.util.ShareLinkParser
 import kotlinx.coroutines.launch
 
 private object Route {
@@ -268,7 +269,11 @@ fun RootScreen(
                                 showEditor = true
                             },
                             onNewWithProtocol = { protocol ->
-                                viewModel.draftProfile = Profile(protocol = protocol)
+                                viewModel.draftProfile = Profile(
+                                    id = ShareLinkParser.newId(),
+                                    name = "",
+                                    protocol = protocol,
+                                )
                                 showEditor = true
                             },
                             onOpenDrawer = { scope.launch { drawerState.open() } },

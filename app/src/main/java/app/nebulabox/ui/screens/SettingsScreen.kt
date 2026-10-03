@@ -317,7 +317,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
         )
         if (uiExpanded) {
             SettingsListItem(
-                title = stringResource(R.string.settings_group_appearance),
+                title = "Language",
                 options = listOf(
                     "system" to stringResource(R.string.lang_system),
                     "en" to stringResource(R.string.lang_english),

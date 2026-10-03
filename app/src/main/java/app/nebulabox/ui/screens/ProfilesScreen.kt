@@ -189,8 +189,8 @@ fun ProfilesScreen(
             bySub.filter { p ->
                 p.displayName.lowercase().contains(q) ||
                     p.server.lowercase().contains(q) ||
-                    p.protocol.label.lowercase().contains(q) ||
-                    p.group.lowercase().contains(q)
+                    p.protocol.wire.lowercase().contains(q) ||
+                    p.remark.lowercase().contains(q)
             }
         }
     }
@@ -215,7 +215,7 @@ fun ProfilesScreen(
                 onImportClipboard = {
                     val clip = readClipboard(context)
                     if (clip.isNullOrBlank()) {
-                        Toast.makeText(context, R.string.clipboard_empty, Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
                     } else {
                         viewModel.submitImportText(clip)
                     }
@@ -404,7 +404,7 @@ fun ProfilesScreen(
             onCopyFullConfig = {
                 shareTarget = null
                 val json = runCatching { ConfigBuilder.build(profile, settings.normalized()) }
-                    .getOrElse { profile.rawConfigJson }
+                    .getOrElse { profile.customConfig }
                 copyToClipboard(context, "${profile.displayName} JSON", json)
             },
         )
