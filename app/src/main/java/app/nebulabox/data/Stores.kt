@@ -97,23 +97,34 @@ class ProfileStore(private val context: Context) {
             profile
         }
         val index = list.indexOfFirst { it.id == normalized.id }
-        if (index >= 0) list.toMutableList().also { it[index] = normalized } else list + normalized
+        if (index >= 0) {
+            list.toMutableList().also { it[index] = normalized }
+        } else {
+            (listOf(normalized) + list).mapIndexed { idx, p -> p.copy(order = idx) }
+        }
     }
 
     suspend fun addAll(newProfiles: List<Profile>) = write { list ->
-        val baseOrder = list.maxOfOrNull { it.order } ?: 0
-        list + newProfiles.mapIndexed { index, profile ->
+        val prepended = newProfiles.map { profile ->
             profile.copy(
-                order = baseOrder + index + 1,
                 lastDelayMs = 0,
                 lastTestedAt = 0L,
             )
+        }
+        (prepended + list).mapIndexed { index, profile ->
+            profile.copy(order = index)
         }
     }
 
     suspend fun delete(id: String) = write { list -> list.filterNot { it.id == id } }
 
     suspend fun clear() = write { emptyList() }
+
+    suspend fun clearGroup(subId: String) = write { list ->
+        list.filterNot { p ->
+            if (subId.isBlank()) p.subscriptionId.isBlank() else p.subscriptionId == subId
+        }
+    }
 
     suspend fun update(id: String, transform: (Profile) -> Profile) = write { list ->
         list.map { if (it.id == id) transform(it) else it }

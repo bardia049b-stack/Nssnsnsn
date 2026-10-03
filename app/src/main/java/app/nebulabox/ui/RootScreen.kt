@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -109,7 +111,7 @@ fun RootScreen(
                     onClick = { navController.goTo(Route.SERVERS) },
                     icon = {
                         Icon(
-                            painter = painterResource(id = R.drawable.ic_qu_switch_24dp),
+                            imageVector = Icons.Outlined.Dns,
                             contentDescription = "Servers",
                         )
                     },

@@ -120,9 +120,13 @@ fun SubscriptionsSheet(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onAddSubscription(remarks.ifBlank { "Subscription" }, url.trim())
+                    val name = remarks.trim().ifBlank {
+                        runCatching { java.net.URL(url.trim()).host }.getOrDefault("Subscription")
+                    }
+                    onAddSubscription(name, url.trim())
                     remarks = ""
                     url = ""
+                    onDismiss()
                 },
                 enabled = url.isNotBlank() && !isUpdating,
             ) {

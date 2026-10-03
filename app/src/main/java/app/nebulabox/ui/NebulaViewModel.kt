@@ -325,7 +325,7 @@ class NebulaViewModel(
             val currentSettings = settingsStore.current().normalized()
             val subFilter = currentSettings.selectedSubscriptionId
             val targetList = profiles.value.filter {
-                subFilter.isBlank() || it.subscriptionId == subFilter
+                if (subFilter.isBlank()) it.subscriptionId.isBlank() else it.subscriptionId == subFilter
             }
             if (targetList.isEmpty()) {
                 snack.emit("No profiles to test")
@@ -379,7 +379,7 @@ class NebulaViewModel(
             val currentSettings = settingsStore.current().normalized()
             val subFilter = currentSettings.selectedSubscriptionId
             val targetList = profiles.value.filter {
-                subFilter.isBlank() || it.subscriptionId == subFilter
+                if (subFilter.isBlank()) it.subscriptionId.isBlank() else it.subscriptionId == subFilter
             }
             if (targetList.isEmpty()) return@launch
 
@@ -546,9 +546,10 @@ class NebulaViewModel(
     fun deleteAllProfiles() {
         launchLoading {
             withContext(Dispatchers.IO) {
-                profileStore.clear()
+                val subFilter = settingsStore.current().selectedSubscriptionId
+                profileStore.clearGroup(subFilter)
             }
-            snack.emit("All configurations removed")
+            snack.emit("All configurations in current group removed")
         }
     }
 
@@ -557,7 +558,8 @@ class NebulaViewModel(
             val text = withContext(Dispatchers.IO) {
                 val subFilter = settings.value.selectedSubscriptionId
                 val list = profileStore.all().filter {
-                    (subFilter.isBlank() || it.subscriptionId == subFilter) && it.protocol != Protocol.CUSTOM
+                    val matchGroup = if (subFilter.isBlank()) it.subscriptionId.isBlank() else it.subscriptionId == subFilter
+                    matchGroup && it.protocol != Protocol.CUSTOM
                 }
                 list.joinToString("\n") { ShareLinkParser.toShareUri(it) }
             }
@@ -602,8 +604,11 @@ class NebulaViewModel(
                     )
                     profileStore.upsertSubscription(subItem)
                     profileStore.replaceSubscriptionProfiles(subItem.id, subItem.url, parsedSub)
-                    if (settingsStore.current().selectedProfileId.isNullOrBlank()) {
-                        settingsStore.update { it.copy(selectedProfileId = parsedSub.first().id) }
+                    settingsStore.update {
+                        it.copy(
+                            selectedSubscriptionId = subItem.id,
+                            selectedProfileId = if (it.selectedProfileId.isNullOrBlank()) parsedSub.first().id else it.selectedProfileId,
+                        )
                     }
                     importResult.emit(ImportResult(parsedSub.size, text))
                     return
@@ -611,20 +616,20 @@ class NebulaViewModel(
             }
         }
 
-        val currentSubId = settingsStore.current().selectedSubscriptionId
         val parsed = runCatching { ShareLinkParser.parseMany(text) }.getOrDefault(emptyList())
             .map {
-                val withSub = if (currentSubId.isNotBlank()) it.copy(subscriptionId = currentSubId) else it
-                withSub.copy(lastDelayMs = 0, lastTestedAt = 0L)
+                it.copy(subscriptionId = "", subscriptionUrl = "", lastDelayMs = 0, lastTestedAt = 0L)
             }
         if (parsed.isEmpty()) {
             importResult.emit(ImportResult(0, text))
             return
         }
         profileStore.addAll(parsed)
-        val currentSettings = settingsStore.current()
-        if (currentSettings.selectedProfileId.isNullOrBlank()) {
-            settingsStore.update { it.copy(selectedProfileId = parsed.first().id) }
+        settingsStore.update {
+            it.copy(
+                selectedSubscriptionId = "",
+                selectedProfileId = if (it.selectedProfileId.isNullOrBlank()) parsed.first().id else it.selectedProfileId,
+            )
         }
         importResult.emit(ImportResult(parsed.size, text))
     }
@@ -666,8 +671,11 @@ class NebulaViewModel(
                     val parsed = runCatching { ShareLinkParser.parseMany(body) }.getOrDefault(emptyList())
                     if (parsed.isNotEmpty()) {
                         profileStore.replaceSubscriptionProfiles(sub.id, sub.url, parsed)
-                        if (settingsStore.current().selectedProfileId.isNullOrBlank()) {
-                            settingsStore.update { it.copy(selectedProfileId = parsed.first().id) }
+                        settingsStore.update {
+                            it.copy(
+                                selectedSubscriptionId = sub.id,
+                                selectedProfileId = if (it.selectedProfileId.isNullOrBlank()) parsed.first().id else it.selectedProfileId,
+                            )
                         }
                         snack.emit("Subscription '$name': imported ${parsed.size} configuration(s)")
                     } else {

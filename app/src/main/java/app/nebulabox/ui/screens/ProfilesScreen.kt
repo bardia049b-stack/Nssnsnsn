@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -78,7 +79,7 @@ fun ProfilesScreen(
 
     val filteredProfiles = remember(profiles, selectedSubId, searchQuery) {
         val bySub = if (selectedSubId.isBlank()) {
-            profiles
+            profiles.filter { it.subscriptionId.isBlank() }
         } else {
             profiles.filter { it.subscriptionId == selectedSubId }
         }
@@ -92,6 +93,14 @@ fun ProfilesScreen(
                     p.protocol.wire.lowercase().contains(q) ||
                     p.remark.lowercase().contains(q)
             }
+        }
+    }
+
+    val listState = rememberLazyListState()
+    val firstProfileId = filteredProfiles.firstOrNull()?.id
+    LaunchedEffect(firstProfileId, filteredProfiles.size) {
+        if (filteredProfiles.isNotEmpty()) {
+            listState.scrollToItem(0)
         }
     }
 
@@ -176,6 +185,7 @@ fun ProfilesScreen(
             subscriptions = subscriptions,
             profiles = profiles,
             selectedSubId = selectedSubId,
+            currentListCount = filteredProfiles.size,
             onSelectGroup = { viewModel.selectSubscriptionFilter(it) },
             onPingAll = { viewModel.testAllRealPing() },
             onSortByPing = { viewModel.sortByTestResults() },
@@ -184,12 +194,13 @@ fun ProfilesScreen(
         Box(modifier = Modifier.weight(1f)) {
             if (filteredProfiles.isEmpty()) {
                 EmptyServerState(
-                    hasAnyProfiles = profiles.isNotEmpty(),
+                    hasAnyProfiles = searchQuery.isNotBlank(),
                     onImportClipboard = importClipboardAction,
                     onOpenImportDialog = { showImportDialog = true },
                 )
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(
                         start = 16.dp,
