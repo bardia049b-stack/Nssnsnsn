@@ -5,7 +5,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * The protocol families the tunnel engine can speak.
- * Every one of these maps onto a real sing-box outbound type.
+ * Every one of these maps onto a real sing-box outbound type (or raw custom JSON).
  */
 enum class Protocol(val wire: String) {
     @SerialName("vless")
@@ -40,6 +40,9 @@ enum class Protocol(val wire: String) {
 
     @SerialName("naive")
     NAIVE("naive"),
+
+    @SerialName("custom")
+    CUSTOM("custom"),
 
     @SerialName("direct")
     DIRECT("direct");
@@ -78,14 +81,14 @@ data class TlsSettings(
     val utlsFingerprint: String = "chrome",
 )
 
-/** A single server the user can connect to. */
+/** A single server or custom JSON configuration the user can connect to. */
 @Serializable
 data class Profile(
     val id: String,
     var name: String,
     val protocol: Protocol,
-    val server: String,
-    val serverPort: Int,
+    val server: String = "",
+    val serverPort: Int = 0,
 
     // authentication, meaning depends on protocol
     val username: String = "",         // socks / http user, ssh user, tuic uuid
@@ -122,6 +125,9 @@ data class Profile(
     val transport: Transport = Transport(),
     val tls: TlsSettings = TlsSettings(),
 
+    // Raw custom sing-box JSON configuration (full config or single outbound)
+    val customConfig: String = "",
+
     val subscriptionUrl: String = "",
     val remark: String = "",
     var order: Int = 0,
@@ -129,5 +135,12 @@ data class Profile(
     var lastDelayMs: Int = -1,
 ) {
     val displayName: String
-        get() = name.ifBlank { "$server:$serverPort" }
+        get() = name.ifBlank {
+            when {
+                server.isNotBlank() && serverPort > 0 -> "$server:$serverPort"
+                server.isNotBlank() -> server
+                protocol == Protocol.CUSTOM -> "Custom JSON"
+                else -> protocol.wire
+            }
+        }
 }

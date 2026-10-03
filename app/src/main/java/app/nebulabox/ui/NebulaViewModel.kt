@@ -11,10 +11,10 @@ import app.nebulabox.data.Profile
 import app.nebulabox.data.ProfileStore
 import app.nebulabox.data.SettingsStore
 import app.nebulabox.engine.Engines
+import app.nebulabox.engine.OutboundGroup
 import app.nebulabox.engine.TunnelEngine
 import app.nebulabox.engine.TunnelState
 import app.nebulabox.engine.TunnelStatus
-import app.nebulabox.engine.OutboundGroup
 import app.nebulabox.service.Actions
 import app.nebulabox.util.ShareLinkParser
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -116,10 +116,22 @@ class NebulaViewModel(
         if (status.value.state == TunnelState.STARTED) disconnect() else connect(profile)
     }
 
+    fun selectProfile(profile: Profile) {
+        viewModelScope.launch {
+            settingsStore.update { it.copy(selectedProfileId = profile.id) }
+        }
+    }
+
     // ------------------------------------------------------------- profiles
 
     fun saveProfile(profile: Profile) {
-        viewModelScope.launch { profileStore.upsert(profile) }
+        viewModelScope.launch {
+            profileStore.upsert(profile)
+            val currentSettings = settingsStore.current()
+            if (currentSettings.selectedProfileId.isNullOrBlank()) {
+                settingsStore.update { it.copy(selectedProfileId = profile.id) }
+            }
+        }
     }
 
     fun deleteProfile(id: String) {
@@ -130,20 +142,32 @@ class NebulaViewModel(
         viewModelScope.launch { profileStore.move(from, to) }
     }
 
+    /** Immediately parses and imports links or Custom JSON text. */
     fun submitImportText(text: String) {
-        pendingImport.value = text
+        if (text.isBlank()) return
+        viewModelScope.launch {
+            importTextInternal(text)
+        }
     }
 
-    /** Parses whatever arrived via share/intent and stores the profiles. */
+    /** Kept for compatibility with MainActivity lifecycle calls. */
     suspend fun consumePendingImport() {
         val text = pendingImport.value ?: return
         pendingImport.value = null
-        val parsed = ShareLinkParser.parseMany(text)
+        importTextInternal(text)
+    }
+
+    private suspend fun importTextInternal(text: String) {
+        val parsed = runCatching { ShareLinkParser.parseMany(text) }.getOrDefault(emptyList())
         if (parsed.isEmpty()) {
             importResult.emit(ImportResult(0, text))
             return
         }
         profileStore.addAll(parsed)
+        val currentSettings = settingsStore.current()
+        if (currentSettings.selectedProfileId.isNullOrBlank()) {
+            settingsStore.update { it.copy(selectedProfileId = parsed.first().id) }
+        }
         importResult.emit(ImportResult(parsed.size, text))
     }
 

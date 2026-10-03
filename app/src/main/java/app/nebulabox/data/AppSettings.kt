@@ -12,19 +12,19 @@ data class AppSettings(
     val routeMode: String = "global",      // global | rule | direct
     val bypassLan: Boolean = true,
     val bypassChina: Boolean = false,
-    val blockAds: Boolean = true,
+    val blockAds: Boolean = false,
     val ipv6: Boolean = false,
 
     // dns
-    val remoteDns: String = "https://1.1.1.1/dns-query",
-    val directDns: String = "https://8.8.8.8/dns-query",
+    val remoteDns: String = "1.1.1.1",
+    val directDns: String = "8.8.8.8",
     val dnsStrategy: String = "prefer_ipv4",
 
     // tunnel tuning
     val mtu: Int = 9000,
     val tcpFastOpen: Boolean = false,
     val sniffing: Boolean = true,
-    val tcpMux: Boolean = true,
+    val tcpMux: Boolean = false,
     val tcpMuxPadding: Boolean = false,
 
     // per-app proxy

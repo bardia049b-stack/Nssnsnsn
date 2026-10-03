@@ -1,6 +1,9 @@
 package app.nebulabox.engine
 
 import android.annotation.SuppressLint
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.system.OsConstants
 import android.util.Log
@@ -324,9 +327,79 @@ class LibboxEngine : TunnelEngine {
 
         override fun localDNSTransport(): LocalDNSTransport? = null
 
-        override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) = Unit
+        private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
-        override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) = Unit
+        override fun startDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
+            listener ?: return
+            val cm = runCatching {
+                app.nebulabox.Application.instance.getSystemService(ConnectivityManager::class.java)
+            }.getOrNull()
+
+            fun notifyDefaultInterface(network: Network?) {
+                runCatching {
+                    if (network != null && cm != null) {
+                        val caps = cm.getNetworkCapabilities(network)
+                        if (caps != null && !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                            val lp = cm.getLinkProperties(network)
+                            val ifaceName = lp?.interfaceName
+                            if (!ifaceName.isNullOrBlank()) {
+                                val ni = NetworkInterface.getByName(ifaceName)
+                                if (ni != null) {
+                                    listener.updateDefaultInterface(ifaceName, ni.index, false, false)
+                                    return
+                                }
+                            }
+                        }
+                    }
+                    // Fallback: pick first non-loopback, non-tun physical interface that is up
+                    val fallback = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                        .firstOrNull { ni ->
+                            ni.isUp && !ni.isLoopback && !ni.isPointToPoint &&
+                                !ni.name.startsWith("tun") && !ni.name.startsWith("ppp") &&
+                                !ni.name.startsWith("dummy")
+                        }
+                    if (fallback != null) {
+                        listener.updateDefaultInterface(fallback.name, fallback.index, false, false)
+                    } else {
+                        listener.updateDefaultInterface("", -1, false, false)
+                    }
+                }
+            }
+
+            notifyDefaultInterface(cm?.activeNetwork)
+
+            if (cm != null) {
+                val cb = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        notifyDefaultInterface(network)
+                    }
+
+                    override fun onCapabilitiesChanged(
+                        network: Network,
+                        networkCapabilities: NetworkCapabilities,
+                    ) {
+                        if (!networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
+                            notifyDefaultInterface(network)
+                        }
+                    }
+
+                    override fun onLost(network: Network) {
+                        notifyDefaultInterface(cm.activeNetwork)
+                    }
+                }
+                networkCallback = cb
+                runCatching { cm.registerDefaultNetworkCallback(cb) }
+            }
+        }
+
+        override fun closeDefaultInterfaceMonitor(listener: InterfaceUpdateListener?) {
+            val cb = networkCallback ?: return
+            networkCallback = null
+            runCatching {
+                val cm = app.nebulabox.Application.instance.getSystemService(ConnectivityManager::class.java)
+                cm?.unregisterNetworkCallback(cb)
+            }
+        }
 
         override fun startNeighborMonitor(listener: NeighborUpdateListener?) = Unit
 

@@ -26,7 +26,8 @@
     <string name="action_delete">حذف</string>
     <string name="action_save">ذخیره</string>
     <string name="action_cancel">انصراف</string>
-    <string name="action_import">وارد کردن لینک</string>
+    <string name="action_import">وارد کردن کانفیگ</string>
+    <string name="action_paste_clipboard">چسباندن از کلیپ‌بورد</string>
     <string name="action_url_test">سنجش تأخیر</string>
     <string name="action_clear_logs">پاک کردن گزارش‌ها</string>
 
@@ -41,10 +42,10 @@
 
     <!-- profiles -->
     <string name="empty_profiles_title">هنوز پروفایلی ندارید</string>
-    <string name="empty_profiles_body">یک لینک اشتراک وارد کنید یا سرور را دستی اضافه کنید.</string>
-    <string name="import_hint">یک یا چند لینک را بچسبانید. همهٔ قالب‌های vless://، vmess://، trojan://، ss://، socks://، http://، hysteria2://، tuic://، wireguard://، ssh:// و JSON سینگ‌باکس پشتیبانی می‌شوند.</string>
-    <string name="import_label">لینک اشتراک</string>
-    <string name="import_failed">این لینک قابل پردازش نبود</string>
+    <string name="empty_profiles_body">یک لینک اشتراک یا کانفیگ JSON سفارشی وارد کنید یا سرور را دستی اضافه نمایید.</string>
+    <string name="import_hint">یک یا چند لینک (vless://، vmess://، trojan://، ss://، hysteria2://، tuic://، wireguard:// و…) یا کانفیگ کامل Custom JSON ({ … }) را بچسبانید.</string>
+    <string name="import_label">لینک کانفیگ یا Custom JSON</string>
+    <string name="import_failed">این لینک یا کانفیگ JSON قابل پردازش نبود</string>
     <plurals name="profiles_imported">
         <item quantity="one">%1$d پروفایل وارد شد</item>
         <item quantity="other">%1$d پروفایل وارد شد</item>
@@ -65,6 +66,7 @@
     <string name="field_tls">TLS</string>
     <string name="field_sni">نام سرور (SNI)</string>
     <string name="field_insecure">اجازهٔ گواهی نامعتبر</string>
+    <string name="field_custom_json">کانفیگ Custom JSON (سینگ‌باکس یا Outbound)</string>
 
     <!-- settings -->
     <string name="section_appearance">ظاهر</string>

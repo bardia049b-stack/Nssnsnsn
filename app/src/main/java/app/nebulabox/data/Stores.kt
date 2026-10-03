@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json as KJson
@@ -32,14 +33,7 @@ class ProfileStore(private val context: Context) {
         runCatching { kjson.decodeFromString(profileListSerializer, raw) }.getOrDefault(emptyList())
     }
 
-    suspend fun all(): List<Profile> = context.profileStore.data.map { prefs ->
-        val raw = prefs[PROFILES_KEY] ?: return@map emptyList<Profile>()
-        runCatching { kjson.decodeFromString(profileListSerializer, raw) }.getOrDefault(emptyList())
-    }.let { flow ->
-        var out: List<Profile> = emptyList()
-        flow.collect { out = it }
-        out
-    }
+    suspend fun all(): List<Profile> = profiles.first()
 
     suspend fun upsert(profile: Profile) = write { list ->
         val index = list.indexOfFirst { it.id == profile.id }
@@ -47,8 +41,9 @@ class ProfileStore(private val context: Context) {
     }
 
     suspend fun addAll(newProfiles: List<Profile>) = write { list ->
+        val baseOrder = list.maxOfOrNull { it.order } ?: 0
         list + newProfiles.mapIndexed { index, profile ->
-            profile.copy(order = (list.maxOfOrNull { it.order } ?: 0) + index + 1)
+            profile.copy(order = baseOrder + index + 1)
         }
     }
 
@@ -109,9 +104,5 @@ class SettingsStore(private val context: Context) {
         }
     }
 
-    suspend fun current(): AppSettings {
-        var out = AppSettings()
-        settings.collect { out = it }
-        return out
-    }
+    suspend fun current(): AppSettings = settings.first()
 }
