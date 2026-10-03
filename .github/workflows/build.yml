@@ -36,29 +36,42 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
+      - name: Cache libbox.aar
+        id: cache-libbox
+        uses: actions/cache@v4
+        with:
+          path: app/libs/libbox.aar
+          key: libbox-v1.14.2-arm64-v1
+
       - name: Install NDK r28b
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
         run: |
           sdkmanager --install "ndk;28.0.13004108"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108" >> $GITHUB_ENV
 
       - name: Setup Go 1.25
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
         uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+          cache: false
 
       - name: Install gomobile & gobind
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
         run: |
           go install github.com/sagernet/gomobile/cmd/gomobile@v0.1.13
           go install github.com/sagernet/gomobile/cmd/gobind@v0.1.13
           echo "$HOME/go/bin" >> $GITHUB_PATH
 
       - name: Clone sing-box v1.14.2
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
         run: |
           git clone --depth 1 --branch v1.14.2 https://github.com/SagerNet/sing-box.git /tmp/sing-box
           cd /tmp/sing-box
           git submodule update --init --recursive --depth 1
 
       - name: Build libbox.aar (arm64)
+        if: steps.cache-libbox.outputs.cache-hit != 'true'
         run: |
           cd /tmp/sing-box
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/28.0.13004108
@@ -73,8 +86,10 @@ jobs:
       - name: Build APK
         id: build_apk
         run: |
+          set -eo pipefail
           cd ${{ github.workspace }}
-          BUILD_TYPE="${{ github.event.inputs.build_type || 'debug' }}"
+          ls -lh app/libs/libbox.aar
+          BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
 
           if [ "$BUILD_TYPE" = "release" ]; then
             ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
@@ -85,7 +100,8 @@ jobs:
           fi
 
           if [ -n "$APK_PATH" ]; then
-            APK_NAME="NebulaBox-${BUILD_TYPE}-${{ github.sha }}.apk"
+            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+            APK_NAME="NebulaBox-${BUILD_TYPE}-${SHORT_SHA}.apk"
             cp "$APK_PATH" "$APK_NAME"
             echo "apk_path=$APK_NAME" >> $GITHUB_OUTPUT
             echo "::notice::APK built: $APK_NAME ($(stat -c%s "$APK_NAME") bytes)"
@@ -95,18 +111,26 @@ jobs:
             exit 1
           fi
 
+      - name: Upload APK Artifact
+        if: steps.build_apk.outputs.apk_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: NebulaBox-APK
+          path: ${{ steps.build_apk.outputs.apk_path }}
+          retention-days: 30
+
       - name: Create GitHub Release
         if: steps.build_apk.outputs.apk_path != ''
         uses: softprops/action-gh-release@v2
         with:
           name: NebulaBox ${{ github.sha }}
-          tag_name: v1.0.0-${{ github.sha }}
+          tag_name: v1.0.0-${{ github.run_number }}
           body: |
             **NebulaBox - Android VPN Client**
 
-            - Built with sing-box v1.14.2
+            - Built with sing-box v1.14.2 (`libbox.aar` included)
             - ARM64 support
-            - Full protocol support (VLESS, VMess, Trojan, Shadowsocks, WireGuard, etc.)
+            - Full protocol support (VLESS, VMess, Trojan, Shadowsocks, WireGuard, Hysteria2, TUIC, etc.)
           files: |
             ${{ steps.build_apk.outputs.apk_path }}
           fail_on_unmatched_files: false

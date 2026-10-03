@@ -26,6 +26,7 @@ import io.nekohasekai.libbox.OutboundGroupItemIterator
 import io.nekohasekai.libbox.OverrideOptions
 import io.nekohasekai.libbox.PlatformInterface
 import io.nekohasekai.libbox.PlatformUser
+import io.nekohasekai.libbox.SetupOptions
 import io.nekohasekai.libbox.ShellSession
 import io.nekohasekai.libbox.StringIterator
 import io.nekohasekai.libbox.SystemProxyStatus
@@ -67,6 +68,26 @@ class LibboxEngine : TunnelEngine {
     private var commandClient: CommandClient? = null
     private var platform: Platform? = null
     private var openTunCallback: (() -> Boolean)? = null
+    private var setupDone: Boolean = false
+
+    private fun ensureSetup() {
+        if (setupDone) return
+        runCatching {
+            val app = app.nebulabox.Application.instance
+            val baseDir = app.filesDir.apply { mkdirs() }
+            val workingDir = (app.getExternalFilesDir(null) ?: baseDir).apply { mkdirs() }
+            val tempDir = app.cacheDir.apply { mkdirs() }
+            val options = SetupOptions().apply {
+                basePath = baseDir.absolutePath
+                workingPath = workingDir.absolutePath
+                tempPath = tempDir.absolutePath
+            }
+            Libbox.setup(options)
+            setupDone = true
+        }.onFailure {
+            Log.w(TAG, "Libbox.setup failed", it)
+        }
+    }
 
     private val serverHandler = object : CommandServerHandler {
         override fun serviceStop() {
@@ -173,6 +194,7 @@ class LibboxEngine : TunnelEngine {
         mtu: Int,
         openTun: () -> Boolean,
     ) {
+        ensureSetup()
         openTunCallback = openTun
         status.value = TunnelStatus(state = TunnelState.STARTING, profileName = profileName)
 
@@ -338,14 +360,6 @@ class LibboxEngine : TunnelEngine {
         override fun createBridge(options: BridgeOptions?): BridgeSession {
             error("bridge mode requires root")
         }
-
-        override fun usePlatformAutoRedirect(): Boolean = false
-
-        @SuppressLint("NewApi")
-        override fun createAutoRedirect(
-            options: ByteArray?,
-            handler: Any?,
-        ): Any? = null
 
         override fun lookupUser(username: String?): PlatformUser? = null
 
