@@ -128,15 +128,20 @@ object ShareLinkParser {
             else -> rawType
         }
         val wsHost = params["host"] ?: params["authority"] ?: ""
+        val (cleanPath, parsedEd, parsedEh) = extractWsEarlyData(
+            rawPath = params["path"] ?: "",
+            explicitEd = params["ed"]?.toIntOrNull() ?: 0,
+            explicitEh = params["eh"] ?: "",
+        )
         val transport = Transport(
             type = type,
             host = wsHost,
-            path = params["path"] ?: "",
-            serviceName = params["serviceName"] ?: params["service_name"] ?: params["path"] ?: "",
+            path = cleanPath,
+            serviceName = params["serviceName"] ?: params["service_name"] ?: cleanPath,
             headers = params["headers"]?.let { runCatching { parseHeaders(it) }.getOrNull() }
                 ?: emptyMap(),
-            maxEarlyData = params["ed"]?.toIntOrNull() ?: 0,
-            earlyDataHeader = params["eh"] ?: "",
+            maxEarlyData = parsedEd,
+            earlyDataHeader = parsedEh,
         )
 
         val security = (params["security"] ?: "").lowercase()
@@ -187,11 +192,14 @@ object ShareLinkParser {
             else -> rawNet
         }
         val wsHost = (map["host"] ?: "").toString()
+        val (cleanPath, parsedEd, parsedEh) = extractWsEarlyData((map["path"] ?: "").toString())
         val transport = Transport(
             type = netType,
             host = wsHost,
-            path = (map["path"] ?: "").toString(),
-            serviceName = (map["path"] ?: map["serviceName"] ?: "").toString(),
+            path = cleanPath,
+            serviceName = (map["serviceName"] ?: cleanPath).toString(),
+            maxEarlyData = parsedEd,
+            earlyDataHeader = parsedEh,
         )
         val tlsVal = (map["tls"] ?: "").toString().lowercase()
         val tlsEnabled = tlsVal == "tls" || tlsVal == "true" || tlsVal == "1"
@@ -267,6 +275,11 @@ object ShareLinkParser {
         val tlsEnabled = security != "none"
         val wsHost = params["host"] ?: ""
         val fp = (params["fp"] ?: "").ifBlank { "chrome" }
+        val (cleanPath, parsedEd, parsedEh) = extractWsEarlyData(
+            rawPath = params["path"] ?: "",
+            explicitEd = params["ed"]?.toIntOrNull() ?: 0,
+            explicitEh = params["eh"] ?: "",
+        )
         return Profile(
             id = newId(),
             name = (params["remarks"] ?: decode(fragment(link))).ifBlank { "$host:$port" },
@@ -277,8 +290,10 @@ object ShareLinkParser {
             transport = Transport(
                 type = type,
                 host = wsHost,
-                path = params["path"] ?: "",
+                path = cleanPath,
                 serviceName = params["serviceName"] ?: "",
+                maxEarlyData = parsedEd,
+                earlyDataHeader = parsedEh,
             ),
             tls = TlsSettings(
                 enabled = tlsEnabled,
@@ -712,6 +727,25 @@ object ShareLinkParser {
     }
 
     // ------------------------------------------------------------- helpers
+
+    fun extractWsEarlyData(
+        rawPath: String,
+        explicitEd: Int = 0,
+        explicitEh: String = "",
+    ): Triple<String, Int, String> {
+        if (rawPath.contains("?ed=")) {
+            val clean = rawPath.substringBefore("?ed=").ifBlank { "/" }
+            val after = rawPath.substringAfter("?ed=").substringBefore("&")
+            val ed = after.toIntOrNull() ?: if (explicitEd > 0) explicitEd else 2048
+            val eh = explicitEh.ifBlank { "Sec-WebSocket-Protocol" }
+            return Triple(clean, ed, eh)
+        }
+        return Triple(
+            rawPath,
+            explicitEd,
+            if (explicitEd > 0 && explicitEh.isBlank()) "Sec-WebSocket-Protocol" else explicitEh,
+        )
+    }
 
     fun newId(): String = UUID.randomUUID().toString()
 

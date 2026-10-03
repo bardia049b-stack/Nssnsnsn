@@ -3,20 +3,29 @@ package app.nebulabox.config
 import app.nebulabox.data.AppSettings
 import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
+import app.nebulabox.util.IpLocationChecker
 import app.nebulabox.util.Json
+import app.nebulabox.util.ShareLinkParser
+import org.json.JSONObject
 import java.net.URI
 
 /**
  * Turns a [Profile] plus [AppSettings] into a sing-box v1.14+ configuration document.
  *
- * Also supports [Protocol.CUSTOM] (raw sing-box JSON configs — either full configs or
- * single outbound objects) and automatically migrates legacy sing-box 1.8–1.13 fields
- * (such as `dns`/`block` outbounds, legacy inbound `sniff`/`domain_strategy` fields,
- * and legacy DNS `address` server entries) so they run cleanly on sing-box v1.14.2.
+ * Aligned with v2rayNG (`CoreOutboundBuilder` / `AppConfig`) and NekoBoxForAndroid (`V2RayFmt`):
+ *  - Extracts WebSocket `?ed=` early data into `max_early_data` + `early_data_header_name`
+ *  - Sets `packet_encoding = "xudp"` on VLESS & VMess outbounds
+ *  - Uses DoH (`type = "https"`, port 443) for remote DNS over proxy outbounds so Cloudflare
+ *    Workers (`*.workers.dev`) and TCP-only proxies resolve DNS reliably
+ *  - Uses `ipv4_only` domain resolution when IPv6 is disabled so Android mobile networks never
+ *    attempt dead IPv6 `AAAA` dials
+ *  - Exposes local `mixed-in` (`127.0.0.1:10808`) alongside `tun-in` so exit IP, country location,
+ *    and real tunnel delay checks work identically to v2rayNG.
  */
 object ConfigBuilder {
 
     private const val TUN_TAG = "tun-in"
+    private const val MIXED_TAG = "mixed-in"
     private const val OUT_TAG = "out"
     private const val DIRECT_TAG = "direct"
 
@@ -37,12 +46,24 @@ object ConfigBuilder {
     )
 
     fun build(profile: Profile, settings: AppSettings): String {
-        if (profile.protocol == Protocol.CUSTOM || profile.customConfig.isNotBlank()) {
-            return buildCustom(profile.customConfig, settings)
+        val normSettings = settings.normalized()
+        val raw = if (profile.protocol == Protocol.CUSTOM || profile.customConfig.isNotBlank()) {
+            buildCustom(profile.customConfig, normSettings)
+        } else {
+            val primaryOutbound = outboundMap(profile, normSettings)
+            buildWithPrimaryOutbound(primaryOutbound, OUT_TAG, normSettings)
         }
-        val primaryOutbound = outboundMap(profile, settings)
-        return buildWithPrimaryOutbound(primaryOutbound, OUT_TAG, settings)
+        return prettyJson(raw)
     }
+
+    private fun prettyJson(raw: String): String =
+        runCatching { JSONObject(raw).toString(2) }.getOrDefault(raw)
+
+    private fun effectiveMtu(mtu: Int): Int =
+        if (mtu in 1280..1500) mtu else 1500
+
+    private fun effectiveDnsStrategy(settings: AppSettings): String =
+        if (!settings.ipv6) "ipv4_only" else settings.dnsStrategy.ifBlank { "prefer_ipv4" }
 
     private fun buildWithPrimaryOutbound(
         primaryOutbound: Map<String, Any?>,
@@ -109,32 +130,42 @@ object ConfigBuilder {
         }
 
         val tun = defaultTunInbound(settings)
+        val mixed = defaultMixedInbound()
+        val strategy = effectiveDnsStrategy(settings)
 
         val dns = mutableMapOf<String, Any?>(
             "servers" to listOf(
-                buildDnsServer(settings.remoteDns, "remote", primaryTag, domainResolver = "local"),
-                buildDnsServer(settings.directDns, "local", null),
+                buildRemoteDnsServer(settings.remoteDns, "remote", primaryTag, domainResolver = "local"),
+                buildDirectDnsServer(settings.directDns, "local"),
             ),
             "final" to "remote",
-            "strategy" to settings.dnsStrategy,
+            "strategy" to strategy,
+        )
+
+        val defaultResolver = mapOf(
+            "server" to "local",
+            "strategy" to strategy,
         )
 
         val route = mutableMapOf<String, Any?>(
             "rules" to rules,
             "auto_detect_interface" to true,
-            "default_domain_resolver" to "local",
+            "default_domain_resolver" to defaultResolver,
             "final" to primaryTag,
         )
         if (ruleSets.isNotEmpty()) {
             route["rule_set"] = ruleSets
         }
 
-        val log = mapOf("level" to settings.logLevel, "timestamp" to true)
+        val log = mapOf(
+            "level" to settings.logLevel.ifBlank { "info" },
+            "timestamp" to true,
+        )
 
         val result = LinkedHashMap<String, Any?>()
         result["log"] = log
         result["dns"] = dns
-        result["inbounds"] = listOf(tun)
+        result["inbounds"] = listOf(tun, mixed)
         result["outbounds"] = outbounds
         result["route"] = route
 
@@ -143,9 +174,8 @@ object ConfigBuilder {
 
     private fun defaultTunAddresses(settings: AppSettings): List<String> {
         val address = mutableListOf<String>()
-        if (settings.routeMode != "direct") address += "172.19.0.1/30"
+        address += "172.19.0.1/30"
         if (settings.ipv6) address += "fdfe:dcba:9876::1/126"
-        if (address.isEmpty()) address += "172.19.0.1/30"
         return address
     }
 
@@ -157,11 +187,50 @@ object ConfigBuilder {
         "auto_route" to true,
         "strict_route" to false,
         "stack" to "mixed",
-        "mtu" to settings.mtu,
+        "mtu" to effectiveMtu(settings.mtu),
+    )
+
+    private fun defaultMixedInbound(): Map<String, Any?> = mapOf(
+        "type" to "mixed",
+        "tag" to MIXED_TAG,
+        "listen" to "127.0.0.1",
+        "listen_port" to IpLocationChecker.LOCAL_MIXED_PORT,
     )
 
     /**
-     * Converts a user-supplied DNS string (e.g. `1.1.1.1`, `https://1.1.1.1/dns-query`,
+     * Builds the remote (proxied) DNS server entry.
+     * Just like v2rayNG (`DNS_PROXY = "https://cloudflare-dns.com/dns-query"`), we use DoH
+     * (`type = "https"`, port 443) over the proxy outbound so TCP-only proxies and Cloudflare
+     * Workers (`*.workers.dev`) resolve DNS reliably without needing UDP or port 853.
+     */
+    private fun buildRemoteDnsServer(
+        rawAddress: String,
+        tag: String,
+        detour: String?,
+        domainResolver: String? = null,
+    ): Map<String, Any?> {
+        val addr = rawAddress.trim()
+        val normalized = when {
+            addr.isBlank() || addr == "1.1.1.1" || addr == "tls://1.1.1.1" ->
+                "https://1.1.1.1/dns-query"
+            addr == "8.8.8.8" || addr == "tls://8.8.8.8" ->
+                "https://8.8.8.8/dns-query"
+            else -> addr
+        }
+        return buildDnsServer(normalized, tag, detour, domainResolver)
+    }
+
+    private fun buildDirectDnsServer(
+        rawAddress: String,
+        tag: String,
+    ): Map<String, Any?> {
+        val addr = rawAddress.trim().ifBlank { "8.8.8.8" }
+        val clean = if (addr == "1.1.1.1") "8.8.8.8" else addr
+        return buildDnsServer(clean, tag, detour = null, domainResolver = null)
+    }
+
+    /**
+     * Converts a user-supplied DNS string (e.g. `8.8.8.8`, `https://1.1.1.1/dns-query`,
      * `tls://8.8.8.8`, `tcp://1.1.1.1`, `local`) into a sing-box v1.14 DNS server object.
      */
     private fun buildDnsServer(
@@ -170,7 +239,7 @@ object ConfigBuilder {
         detour: String?,
         domainResolver: String? = null,
     ): Map<String, Any?> {
-        val addr = rawAddress.trim().ifBlank { "1.1.1.1" }
+        val addr = rawAddress.trim().ifBlank { "8.8.8.8" }
         val map = LinkedHashMap<String, Any?>()
 
         when {
@@ -189,13 +258,13 @@ object ConfigBuilder {
                 val normalized = if (isH3) "https://" + addr.substringAfter("://") else addr
                 val uri = runCatching { URI(normalized) }.getOrNull()
                 val host = uri?.host?.ifBlank { "1.1.1.1" } ?: "1.1.1.1"
-                val port = if (uri != null && uri.port > 0) uri.port else null
-                val path = uri?.path?.takeIf { it.isNotBlank() && it != "/dns-query" }
+                val port = if (uri != null && uri.port > 0) uri.port else 443
+                val path = uri?.path?.takeIf { it.isNotBlank() } ?: "/dns-query"
                 map["type"] = if (isH3) "h3" else "https"
                 map["tag"] = tag
                 map["server"] = host
-                if (port != null) map["server_port"] = port
-                if (path != null) map["path"] = path
+                map["server_port"] = port
+                map["path"] = path
             }
             addr.startsWith("tls://", true) || addr.startsWith("quic://", true) ||
                 addr.startsWith("tcp://", true) || addr.startsWith("udp://", true) -> {
@@ -205,7 +274,7 @@ object ConfigBuilder {
                 val port = rest.substringAfter(":", "").toIntOrNull()
                 map["type"] = scheme
                 map["tag"] = tag
-                map["server"] = host.ifBlank { "1.1.1.1" }
+                map["server"] = host.ifBlank { "8.8.8.8" }
                 if (port != null) map["server_port"] = port
             }
             else -> {
@@ -214,7 +283,7 @@ object ConfigBuilder {
                 val port = clean.substringAfter(":", "").toIntOrNull()
                 map["type"] = "udp"
                 map["tag"] = tag
-                map["server"] = host.ifBlank { "1.1.1.1" }
+                map["server"] = host.ifBlank { "8.8.8.8" }
                 if (port != null) map["server_port"] = port
             }
         }
@@ -229,10 +298,36 @@ object ConfigBuilder {
     }
 
     /**
+     * Sanitize an outbound map from a custom JSON config (strips legacy fields and
+     * normalizes WebSocket `?ed=` early data).
+     */
+    @Suppress("UNCHECKED_CAST")
+    private fun sanitizeCustomOutbound(ob: Map<String, Any?>): Map<String, Any?> {
+        val copy = LinkedHashMap(ob)
+        LEGACY_INBOUND_FIELDS.forEach { copy.remove(it) }
+        val transport = copy["transport"] as? Map<String, Any?>
+        if (transport != null && transport["type"]?.toString() == "ws") {
+            val rawPath = transport["path"]?.toString().orEmpty()
+            if (rawPath.contains("?ed=")) {
+                val tCopy = LinkedHashMap(transport)
+                val (cleanPath, ed, eh) = ShareLinkParser.extractWsEarlyData(
+                    rawPath = rawPath,
+                    explicitEd = (tCopy["max_early_data"] as? Number)?.toInt() ?: 0,
+                    explicitEh = tCopy["early_data_header_name"]?.toString().orEmpty(),
+                )
+                tCopy["path"] = cleanPath
+                if (ed > 0) {
+                    tCopy["max_early_data"] = ed
+                    tCopy["early_data_header_name"] = eh
+                }
+                copy["transport"] = tCopy
+            }
+        }
+        return copy
+    }
+
+    /**
      * Builds a runnable sing-box v1.14 configuration from a Custom JSON string.
-     * Supports both:
-     *  - A complete sing-box configuration object (`{"outbounds": [...], ...}`)
-     *  - A single sing-box outbound object (`{"type": "vless", ...}`)
      */
     @Suppress("UNCHECKED_CAST")
     private fun buildCustom(rawJson: String, settings: AppSettings): String {
@@ -242,8 +337,7 @@ object ConfigBuilder {
 
         // Case 1: Single outbound JSON object (has "type" but no "outbounds"/"endpoints")
         if (!parsed.containsKey("outbounds") && !parsed.containsKey("endpoints") && parsed.containsKey("type")) {
-            val outbound = LinkedHashMap(parsed)
-            LEGACY_INBOUND_FIELDS.forEach { outbound.remove(it) }
+            val outbound = LinkedHashMap(sanitizeCustomOutbound(parsed))
             val tag = (outbound["tag"] as? String)?.ifBlank { OUT_TAG } ?: OUT_TAG
             outbound["tag"] = tag
             return buildWithPrimaryOutbound(outbound, tag, settings)
@@ -252,7 +346,6 @@ object ConfigBuilder {
         // Case 2: Full sing-box config JSON
         val root = LinkedHashMap<String, Any?>(parsed)
 
-        // 2a. Clean up outbounds: remove deprecated "dns" and "block" outbounds (removed in sing-box 1.13+)
         val rawOutbounds = (root["outbounds"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
         val removedDnsTags = mutableSetOf("dns-out")
         val removedBlockTags = mutableSetOf("block", "block-out")
@@ -269,9 +362,7 @@ object ConfigBuilder {
                     if (tag.isNotEmpty()) removedBlockTags += tag
                 }
                 else -> {
-                    val obCopy = LinkedHashMap(ob)
-                    LEGACY_INBOUND_FIELDS.forEach { obCopy.remove(it) }
-                    cleanedOutbounds += obCopy
+                    cleanedOutbounds += sanitizeCustomOutbound(ob)
                 }
             }
         }
@@ -283,7 +374,6 @@ object ConfigBuilder {
             it["type"] != "direct" && it["type"] != "block" && it["type"] != "dns"
         }?.get("tag")?.toString() ?: directTag
 
-        // Remove detour to empty direct outbound on all outbounds
         val finalOutbounds = cleanedOutbounds.map { ob ->
             val copy = LinkedHashMap(ob)
             if (copy["detour"]?.toString() == directTag) {
@@ -295,40 +385,42 @@ object ConfigBuilder {
             root["outbounds"] = finalOutbounds
         }
 
-        // 2b. Ensure Android TUN inbound exists, uses VpnService address (172.19.0.1/30),
-        // and strips legacy InboundOptions (`sniff`, `domain_strategy`, etc.) from ALL inbounds!
         val rawInbounds = (root["inbounds"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }.orEmpty()
         val hasTun = rawInbounds.any { it["type"] == "tun" }
-        val updatedInbounds = if (hasTun) {
-            rawInbounds.map { ib ->
-                val ibCopy = LinkedHashMap(ib)
-                LEGACY_INBOUND_FIELDS.forEach { ibCopy.remove(it) }
-                if (ibCopy["type"] == "tun") {
-                    ibCopy["interface_name"] = "tun0"
-                    ibCopy["address"] = defaultTunAddresses(settings)
-                    ibCopy["auto_route"] = true
-                    ibCopy["strict_route"] = false
-                    ibCopy["stack"] = ibCopy["stack"] ?: "mixed"
-                    ibCopy["mtu"] = (ibCopy["mtu"] as? Number)?.toInt() ?: settings.mtu
-                }
-                ibCopy
+        val hasMixed = rawInbounds.any {
+            (it["listen_port"] as? Number)?.toInt() == IpLocationChecker.LOCAL_MIXED_PORT
+        }
+        val updatedInbounds = mutableListOf<Map<String, Any?>>()
+        if (!hasTun) {
+            updatedInbounds += defaultTunInbound(settings)
+        }
+        for (ib in rawInbounds) {
+            val ibCopy = LinkedHashMap(ib)
+            LEGACY_INBOUND_FIELDS.forEach { ibCopy.remove(it) }
+            if (ibCopy["type"] == "tun") {
+                ibCopy["interface_name"] = "tun0"
+                ibCopy["address"] = defaultTunAddresses(settings)
+                ibCopy["auto_route"] = true
+                ibCopy["strict_route"] = false
+                ibCopy["stack"] = ibCopy["stack"] ?: "mixed"
+                val rawMtu = (ibCopy["mtu"] as? Number)?.toInt() ?: settings.mtu
+                ibCopy["mtu"] = effectiveMtu(rawMtu)
             }
-        } else {
-            listOf(defaultTunInbound(settings)) + rawInbounds.map { ib ->
-                val ibCopy = LinkedHashMap(ib)
-                LEGACY_INBOUND_FIELDS.forEach { ibCopy.remove(it) }
-                ibCopy
-            }
+            updatedInbounds += ibCopy
+        }
+        if (!hasMixed) {
+            updatedInbounds += defaultMixedInbound()
         }
         root["inbounds"] = updatedInbounds
 
-        // 2c. Migrate legacy DNS config to sing-box 1.14 format if present
+        // Migrate legacy DNS config to sing-box 1.14 format if present
         val rawDns = root["dns"] as? Map<String, Any?>
         var localDnsTag: String? = null
         if (rawDns != null) {
             val dnsCopy = LinkedHashMap(rawDns)
             dnsCopy.remove("independent_cache")
             dnsCopy.remove("fakeip")
+            dnsCopy["strategy"] = effectiveDnsStrategy(settings)
 
             val rawServers = (dnsCopy["servers"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }
             if (rawServers != null) {
@@ -347,7 +439,11 @@ object ConfigBuilder {
                             it.isNotBlank() && it != directTag && it !in removedDnsTags && it !in removedBlockTags
                         }
                         val addrResolver = (srv["domain_resolver"] ?: srv["address_resolver"])?.toString()
-                        val migrated = buildDnsServer(legacyAddr, tag, detour, addrResolver)
+                        val migrated = if (detour != null) {
+                            buildRemoteDnsServer(legacyAddr, tag, detour, addrResolver)
+                        } else {
+                            buildDnsServer(legacyAddr, tag, null, addrResolver)
+                        }
                         if (detour == null || migrated["type"] == "local") {
                             if (localDnsTag == null && migrated["type"] != "fakeip") localDnsTag = tag
                         }
@@ -364,7 +460,7 @@ object ConfigBuilder {
                         val type = srvCopy["type"]?.toString() ?: "udp"
                         srvCopy["type"] = type
                         if (type != "local" && type != "hosts" && type != "fakeip" && !srvCopy.containsKey("server")) {
-                            srvCopy["server"] = "1.1.1.1"
+                            srvCopy["server"] = "8.8.8.8"
                         }
                         if (type == "local" || srvCopy["detour"] == null) {
                             if (localDnsTag == null && type != "hosts" && type != "fakeip") {
@@ -376,15 +472,13 @@ object ConfigBuilder {
                 }
                 if (localDnsTag == null) {
                     localDnsTag = "local-dns-auto"
-                    migratedServers += buildDnsServer(settings.directDns, localDnsTag, null)
+                    migratedServers += buildDirectDnsServer(settings.directDns, localDnsTag)
                 }
                 dnsCopy["servers"] = migratedServers
 
-                // Migrate legacy DNS rules (e.g. outbound rule or server pointing to rcode://block)
                 val rawDnsRules = (dnsCopy["rules"] as? List<*>)?.mapNotNull { it as? Map<String, Any?> }
                 if (rawDnsRules != null) {
                     val migratedDnsRules = rawDnsRules.mapNotNull { rule ->
-                        // Drop legacy "outbound": "any" DNS rule which was replaced by default_domain_resolver
                         if (rule.containsKey("outbound")) return@mapNotNull null
                         val ruleCopy = LinkedHashMap(rule)
                         ruleCopy.remove("geosite")
@@ -406,14 +500,16 @@ object ConfigBuilder {
             root["dns"] = dnsCopy
         }
 
-        // 2d. Ensure route has auto_detect_interface and migrate removed dns/block outbound rules
         val rawRoute = (root["route"] as? Map<String, Any?>) ?: emptyMap()
         val routeCopy = LinkedHashMap(rawRoute)
         routeCopy["auto_detect_interface"] = true
         routeCopy.remove("geoip")
         routeCopy.remove("geosite")
         if (!routeCopy.containsKey("default_domain_resolver") && localDnsTag != null) {
-            routeCopy["default_domain_resolver"] = localDnsTag
+            routeCopy["default_domain_resolver"] = mapOf(
+                "server" to localDnsTag,
+                "strategy" to effectiveDnsStrategy(settings),
+            )
         }
         if (!routeCopy.containsKey("final")) {
             routeCopy["final"] = primaryProxyTag
@@ -466,7 +562,6 @@ object ConfigBuilder {
         routeCopy["rules"] = migratedRules
         root["route"] = routeCopy
 
-        // 2e. Migrate experimental.cache_file.store_rdrc -> store_dns if present
         val rawExp = root["experimental"] as? Map<String, Any?>
         if (rawExp != null) {
             val expCopy = LinkedHashMap(rawExp)
@@ -501,10 +596,6 @@ object ConfigBuilder {
             "type" to profile.protocol.wire,
         )
 
-        val supportsMux = profile.protocol in setOf(
-            Protocol.VLESS, Protocol.VMESS, Protocol.TROJAN, Protocol.SHADOWSOCKS,
-        )
-
         if (profile.server.isNotBlank()) {
             base += "server" to profile.server
             base += "server_port" to profile.serverPort
@@ -514,12 +605,14 @@ object ConfigBuilder {
             Protocol.VLESS -> {
                 base += "uuid" to profile.uuid
                 if (profile.flow.isNotBlank()) base += "flow" to profile.flow
+                base += "packet_encoding" to "xudp"
             }
 
             Protocol.VMESS -> {
                 base += "uuid" to profile.uuid
                 base += "alter_id" to profile.alterId
-                if (profile.security.isNotBlank()) base += "security" to profile.security
+                base += "security" to profile.security.ifBlank { "auto" }
+                base += "packet_encoding" to "xudp"
             }
 
             Protocol.TROJAN -> base += "password" to profile.password
@@ -581,17 +674,6 @@ object ConfigBuilder {
             Protocol.CUSTOM, Protocol.DIRECT -> Unit
         }
 
-        if (supportsMux && settings.tcpMux) {
-            base += "multiplex" to mapOf(
-                "enabled" to true,
-                "protocol" to "h2mux",
-                "max_connections" to 4,
-                "padding" to settings.tcpMuxPadding,
-            )
-        }
-
-        if (settings.tcpFastOpen) base += "tcp_fast_open" to true
-
         if (profile.transport.type != "tcp" && profile.transport.type.isNotBlank()) {
             base += "transport" to transportMap(profile)
         }
@@ -603,12 +685,22 @@ object ConfigBuilder {
         return base.toMap()
     }
 
+    /**
+     * Builds the sing-box transport map.
+     * Matches NekoBoxForAndroid (`V2RayFmt.kt`): if `path` contains `?ed=2560`, splits `path`
+     * into clean `path`, `max_early_data = 2560`, and `early_data_header_name = "Sec-WebSocket-Protocol"`.
+     */
     private fun transportMap(profile: Profile): Map<String, Any?> {
         val t = profile.transport
         val fields = mutableListOf<Pair<String, Any?>>("type" to t.type)
         when (t.type) {
             "ws", "httpupgrade" -> {
-                if (t.path.isNotBlank()) fields += "path" to t.path
+                val (cleanPath, earlyData, earlyDataHeader) = ShareLinkParser.extractWsEarlyData(
+                    rawPath = t.path,
+                    explicitEd = t.maxEarlyData,
+                    explicitEh = t.earlyDataHeader,
+                )
+                if (cleanPath.isNotBlank()) fields += "path" to cleanPath
                 if (t.host.isNotBlank()) {
                     fields += if (t.type == "httpupgrade") {
                         "host" to t.host
@@ -616,9 +708,9 @@ object ConfigBuilder {
                         "headers" to mapOf("Host" to t.host)
                     }
                 }
-                if (t.type == "ws" && t.maxEarlyData > 0) {
-                    fields += "max_early_data" to t.maxEarlyData
-                    fields += "early_data_header_name" to t.earlyDataHeader.ifBlank { "Sec-WebSocket-Protocol" }
+                if (t.type == "ws" && earlyData > 0) {
+                    fields += "max_early_data" to earlyData
+                    fields += "early_data_header_name" to earlyDataHeader.ifBlank { "Sec-WebSocket-Protocol" }
                 }
             }
 
@@ -628,7 +720,8 @@ object ConfigBuilder {
             }
 
             "grpc" -> {
-                if (t.serviceName.isNotBlank()) fields += "service_name" to t.serviceName
+                val svc = t.serviceName.substringBefore("?ed=")
+                if (svc.isNotBlank()) fields += "service_name" to svc
             }
         }
         return fields.toMap()
@@ -637,11 +730,14 @@ object ConfigBuilder {
     private fun tlsMap(profile: Profile): Map<String, Any?> {
         val tls = profile.tls
         val fields = mutableListOf<Pair<String, Any?>>("enabled" to true)
-        if (tls.serverName.isNotBlank()) fields += "server_name" to tls.serverName
+        val serverName = tls.serverName.ifBlank {
+            profile.transport.host.ifBlank { profile.server }
+        }
+        if (serverName.isNotBlank()) fields += "server_name" to serverName
         if (tls.insecure) fields += "insecure" to true
         if (tls.alpn.isNotEmpty()) fields += "alpn" to tls.alpn
         if (tls.minVersion.isNotBlank()) fields += "min_version" to tls.minVersion
-        if (tls.maxVersion.isNotBlank()) fields += "max_version" to tls.minVersion
+        if (tls.maxVersion.isNotBlank()) fields += "max_version" to tls.maxVersion
 
         if (tls.reality) {
             fields += "reality" to mapOf(

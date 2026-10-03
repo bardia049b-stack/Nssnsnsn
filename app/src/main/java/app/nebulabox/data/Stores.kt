@@ -85,11 +85,12 @@ class SettingsStore(private val context: Context) {
 
     val settings: Flow<AppSettings> = context.settingsStore.data.map { prefs ->
         val raw = prefs[SETTINGS_KEY]
-        if (raw == null) {
+        val decoded = if (raw == null) {
             AppSettings()
         } else {
             runCatching { kjson.decodeFromString(settingsSerializer, raw) }.getOrDefault(AppSettings())
         }
+        decoded.normalized()
     }
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
@@ -99,7 +100,7 @@ class SettingsStore(private val context: Context) {
                 AppSettings()
             } else {
                 runCatching { kjson.decodeFromString(settingsSerializer, raw) }.getOrDefault(AppSettings())
-            }
+            }.normalized()
             prefs[SETTINGS_KEY] = kjson.encodeToString(settingsSerializer, transform(current))
         }
     }

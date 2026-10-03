@@ -419,21 +419,25 @@ private fun ConfigTab(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Last Generated sing-box v1.14.2 Config",
+                text = "Active sing-box v1.14.2 Config",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
             OutlinedButton(
                 onClick = onCopy,
                 enabled = configJson.isNotBlank(),
+                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
             ) {
                 Icon(Icons.Filled.ContentCopy, contentDescription = null)
                 Spacer(Modifier.width(6.dp))
-                Text("Copy JSON")
+                Text("Copy JSON", maxLines = 1, softWrap = false)
             }
         }
 

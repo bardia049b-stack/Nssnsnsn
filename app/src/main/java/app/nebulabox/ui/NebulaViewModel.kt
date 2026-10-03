@@ -16,15 +16,22 @@ import app.nebulabox.engine.TunnelEngine
 import app.nebulabox.engine.TunnelState
 import app.nebulabox.engine.TunnelStatus
 import app.nebulabox.service.Actions
+import app.nebulabox.util.AppLogger
+import app.nebulabox.util.IpLocationChecker
 import app.nebulabox.util.ShareLinkParser
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -54,6 +61,14 @@ class NebulaViewModel(
 
     val logs: MutableSharedFlow<TunnelEngine.LogLine> = MutableSharedFlow(extraBufferCapacity = 512)
 
+    private val _endpointLocation = MutableStateFlow<IpLocationChecker.EndpointLocation?>(null)
+    val endpointLocation: StateFlow<IpLocationChecker.EndpointLocation?> = _endpointLocation.asStateFlow()
+
+    private val _checkingLocation = MutableStateFlow(false)
+    val checkingLocation: StateFlow<Boolean> = _checkingLocation.asStateFlow()
+
+    private var locationJob: Job? = null
+
     /** Profile currently being edited in the bottom sheet, if any. */
     var draftProfile: Profile? = null
 
@@ -74,11 +89,53 @@ class NebulaViewModel(
                 .flatMapLatest { engine -> engine?.logs ?: emptyFlow() }
                 .collect { logs.emit(it) }
         }
+
+        // Automatically query connected Exit IP & Country when tunnel state becomes STARTED.
+        viewModelScope.launch {
+            status
+                .map { it.state }
+                .distinctUntilChanged()
+                .collect { state ->
+                    if (state == TunnelState.STARTED) {
+                        fetchExitLocationWithRetry()
+                    } else {
+                        locationJob?.cancel()
+                        _checkingLocation.value = false
+                        _endpointLocation.value = null
+                    }
+                }
+        }
     }
 
     val connected: Boolean get() = status.value.state == TunnelState.STARTED
 
     val activeEngine: TunnelEngine? get() = Engines.active.value
+
+    // ----------------------------------------------------------- location
+
+    fun refreshLocation() {
+        if (status.value.state != TunnelState.STARTED) return
+        fetchExitLocationWithRetry(initialDelayMs = 0L)
+    }
+
+    private fun fetchExitLocationWithRetry(initialDelayMs: Long = 700L) {
+        locationJob?.cancel()
+        locationJob = viewModelScope.launch {
+            _checkingLocation.value = true
+            if (initialDelayMs > 0) delay(initialDelayMs)
+            for (attempt in 1..3) {
+                if (status.value.state != TunnelState.STARTED) break
+                val loc = IpLocationChecker.fetchLocation()
+                if (loc != null) {
+                    _endpointLocation.value = loc
+                    AppLogger.i("GeoIP", "Connected exit IP: ${loc.ip} (${loc.flagEmoji} ${loc.countryName}, ${loc.delayMs} ms)")
+                    break
+                }
+                delay(1500L)
+            }
+            _checkingLocation.value = false
+        }
+    }
 
     // ----------------------------------------------------------- connecting
 
@@ -113,7 +170,11 @@ class NebulaViewModel(
     }
 
     fun toggle(profile: Profile) {
-        if (status.value.state == TunnelState.STARTED) disconnect() else connect(profile)
+        when (status.value.state) {
+            TunnelState.STARTED, TunnelState.STARTING -> disconnect()
+            TunnelState.STOPPING -> Unit
+            TunnelState.STOPPED -> connect(profile)
+        }
     }
 
     fun selectProfile(profile: Profile) {

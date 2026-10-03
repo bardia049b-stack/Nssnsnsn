@@ -5,13 +5,13 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.TrafficStats
 import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Process
 import android.provider.Settings
 import android.system.OsConstants
-import android.util.Log
 import app.nebulabox.BuildConfig
 import app.nebulabox.util.AppLogger
 import io.nekohasekai.libbox.BridgeOptions
@@ -48,6 +48,7 @@ import java.net.Inet6Address
 import java.net.InetSocketAddress
 import java.net.InterfaceAddress
 import java.net.NetworkInterface
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Drives the sing-box native core (`libbox.aar` v1.14.2).
@@ -71,11 +72,30 @@ class LibboxEngine : TunnelEngine {
     private var openTunCallback: (() -> Boolean)? = null
     private var setupDone: Boolean = false
 
+    private val uidPackageCache = ConcurrentHashMap<Int, List<String>>()
+
+    @Volatile private var baseUidTxBytes: Long = 0L
+    @Volatile private var baseUidRxBytes: Long = 0L
+    @Volatile private var lastUidTxBytes: Long = 0L
+    @Volatile private var lastUidRxBytes: Long = 0L
+    @Volatile private var lastTrafficSampleMs: Long = 0L
+
     private val monitorThread by lazy {
         HandlerThread("NebulaNetworkMonitor").apply { start() }
     }
     private val monitorHandler by lazy {
         Handler(monitorThread.looper)
+    }
+
+    private fun resetTrafficCounters() {
+        val myUid = Process.myUid()
+        val tx = TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0L)
+        val rx = TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0L)
+        baseUidTxBytes = tx
+        baseUidRxBytes = rx
+        lastUidTxBytes = tx
+        lastUidRxBytes = rx
+        lastTrafficSampleMs = System.currentTimeMillis()
     }
 
     private fun ensureSetup() {
@@ -130,7 +150,7 @@ class LibboxEngine : TunnelEngine {
 
         override fun writeDebugMessage(message: String?) {
             if (!message.isNullOrBlank()) {
-                AppLogger.d("sing-box", message)
+                AppLogger.d("sing-box", stripAnsi(message))
             }
         }
 
@@ -142,7 +162,10 @@ class LibboxEngine : TunnelEngine {
     private val clientHandler = object : CommandClientHandler {
         override fun connected() {
             AppLogger.i(TAG, "CommandClient connected to CommandServer")
-            status.value = status.value.copy(state = TunnelState.STARTED)
+            val current = status.value
+            if (current.state != TunnelState.STOPPING && current.state != TunnelState.STOPPED) {
+                status.value = current.copy(state = TunnelState.STARTED)
+            }
         }
 
         override fun disconnected(message: String?) {
@@ -162,11 +185,31 @@ class LibboxEngine : TunnelEngine {
         override fun writeStatus(message: io.nekohasekai.libbox.StatusMessage?) {
             message ?: return
             val current = status.value
+            if (current.state == TunnelState.STOPPING || current.state == TunnelState.STOPPED) return
+
+            val myUid = Process.myUid()
+            val nowMs = System.currentTimeMillis()
+            val curTx = TrafficStats.getUidTxBytes(myUid).coerceAtLeast(0L)
+            val curRx = TrafficStats.getUidRxBytes(myUid).coerceAtLeast(0L)
+            val dtMs = (nowMs - lastTrafficSampleMs).coerceAtLeast(500L)
+            val uidTxRate = ((curTx - lastUidTxBytes).coerceAtLeast(0L) * 1000L) / dtMs
+            val uidRxRate = ((curRx - lastUidRxBytes).coerceAtLeast(0L) * 1000L) / dtMs
+            val uidTxTotal = (curTx - baseUidTxBytes).coerceAtLeast(0L)
+            val uidRxTotal = (curRx - baseUidRxBytes).coerceAtLeast(0L)
+            lastUidTxBytes = curTx
+            lastUidRxBytes = curRx
+            lastTrafficSampleMs = nowMs
+
+            val upRate = if (message.uplink > 0L) message.uplink else uidTxRate
+            val downRate = if (message.downlink > 0L) message.downlink else uidRxRate
+            val upTotal = if (message.uplinkTotal > 0L) message.uplinkTotal else uidTxTotal
+            val downTotal = if (message.downlinkTotal > 0L) message.downlinkTotal else uidRxTotal
+
             status.value = current.copy(
-                uplink = message.uplink,
-                downlink = message.downlink,
-                uplinkTotal = message.uplinkTotal,
-                downlinkTotal = message.downlinkTotal,
+                uplink = upRate,
+                downlink = downRate,
+                uplinkTotal = upTotal,
+                downlinkTotal = downTotal,
                 memory = message.memory,
                 connectionsIn = message.connectionsIn,
                 connectionsOut = message.connectionsOut,
@@ -205,11 +248,13 @@ class LibboxEngine : TunnelEngine {
             logIterator ?: return
             while (logIterator.hasNext()) {
                 val entry = logIterator.next() ?: continue
+                val cleanMsg = stripAnsi(entry.message ?: "")
+                if (cleanMsg.isBlank()) continue
                 logFlow.tryEmit(
                     TunnelEngine.LogLine(
                         level = entry.level,
                         time = System.currentTimeMillis(),
-                        message = entry.message,
+                        message = cleanMsg,
                     ),
                 )
             }
@@ -228,6 +273,7 @@ class LibboxEngine : TunnelEngine {
 
         // Clean up any previous session before starting
         cleanupInternal()
+        resetTrafficCounters()
 
         openTunCallback = openTun
         status.value = TunnelStatus(state = TunnelState.STARTING, profileName = profileName)
@@ -274,21 +320,27 @@ class LibboxEngine : TunnelEngine {
         }
     }
 
+    @Synchronized
     private fun cleanupInternal() {
-        runCatching { commandClient?.disconnect() }
+        val client = commandClient
         commandClient = null
-        runCatching { commandServer?.closeService() }
-        runCatching { commandServer?.close() }
+        val srv = commandServer
         commandServer = null
-        platform?.closeDefaultInterfaceMonitor(null)
+        val plat = platform
         platform = null
+
+        plat?.closeDefaultInterfaceMonitor(null)
+        runCatching { client?.disconnect() }
+        runCatching { srv?.closeService() }
+        runCatching { srv?.close() }
     }
 
     override fun stop() {
         AppLogger.i(TAG, "Stopping LibboxEngine")
+        status.value = status.value.copy(state = TunnelState.STOPPING)
         cleanupInternal()
         openTunCallback = null
-        status.value = TunnelStatus()
+        status.value = TunnelStatus(state = TunnelState.STOPPED)
         groups.value = emptyList()
     }
 
@@ -340,24 +392,37 @@ class LibboxEngine : TunnelEngine {
             destinationAddress: String?,
             destinationPort: Int,
         ): ConnectionOwner {
+            val emptyOwner = ConnectionOwner().apply {
+                userId = -1
+                userName = ""
+                setAndroidPackageNames(StringArray(emptyList<String>().iterator()))
+            }
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                error("findConnectionOwner requires Android 10+")
+                return emptyOwner
             }
-            val cm = app.nebulabox.Application.instance.getSystemService(ConnectivityManager::class.java)
-                ?: error("ConnectivityManager unavailable")
-            val uid = cm.getConnectionOwnerUid(
-                ipProtocol,
-                InetSocketAddress(sourceAddress ?: "", sourcePort),
-                InetSocketAddress(destinationAddress ?: "", destinationPort),
-            )
-            if (uid == Process.INVALID_UID) {
-                error("android: connection owner not found")
-            }
-            val packages = app.nebulabox.Application.instance.packageManager.getPackagesForUid(uid)
-            return ConnectionOwner().apply {
-                userId = uid
-                userName = packages?.firstOrNull() ?: ""
-                setAndroidPackageNames(StringArray(packages?.toList().orEmpty().iterator()))
+            return try {
+                val app = app.nebulabox.Application.instance
+                val cm = app.getSystemService(ConnectivityManager::class.java) ?: return emptyOwner
+                val uid = cm.getConnectionOwnerUid(
+                    ipProtocol,
+                    InetSocketAddress(sourceAddress ?: "", sourcePort),
+                    InetSocketAddress(destinationAddress ?: "", destinationPort),
+                )
+                if (uid == Process.INVALID_UID || uid < 0) {
+                    return emptyOwner
+                }
+                val packages = uidPackageCache.getOrPut(uid) {
+                    runCatching {
+                        app.packageManager.getPackagesForUid(uid)?.toList().orEmpty()
+                    }.getOrDefault(emptyList())
+                }
+                ConnectionOwner().apply {
+                    userId = uid
+                    userName = packages.firstOrNull() ?: ""
+                    setAndroidPackageNames(StringArray(packages.iterator()))
+                }
+            } catch (_: Throwable) {
+                emptyOwner
             }
         }
 
@@ -686,5 +751,9 @@ class LibboxEngine : TunnelEngine {
 
     companion object {
         private const val TAG = "LibboxEngine"
+        private val ANSI_REGEX = Regex("\\u001B\\[[0-9;]*[A-Za-z]")
+
+        private fun stripAnsi(text: String): String =
+            ANSI_REGEX.replace(text, "")
     }
 }

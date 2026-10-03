@@ -29,20 +29,30 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Owns the Android VPN session and hands the resulting tun descriptor to the
  * tunnel engine.
+ *
+ * Teardown follows SagerNet/sing-box-for-android (`BoxService.stopService`) and
+ * v2rayNG (`CoreVpnService`):
+ *  - Never blocks the Main UI thread on disconnect
+ *  - Closes the TUN `ParcelFileDescriptor` FIRST on `Dispatchers.IO` so sing-box's
+ *    TUN read loop unblocks immediately, then closes `CommandServer`.
  */
 class TunnelVpnService : VpnService(), TunProvider {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var profileStore: ProfileStore
     private lateinit var settingsStore: SettingsStore
-    private var interfaceFd: ParcelFileDescriptor? = null
+    @Volatile private var interfaceFd: ParcelFileDescriptor? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var logJob: Job? = null
+    private var connectJob: Job? = null
     private var activeProfileName = ""
+    private val isStopping = AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
@@ -56,11 +66,15 @@ class TunnelVpnService : VpnService(), TunProvider {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             Actions.ACTION_CONNECT -> {
+                isStopping.set(false)
                 val profileId = intent.getStringExtra(Actions.EXTRA_PROFILE_ID)
-                scope.launch { connect(profileId) }
+                connectJob?.cancel()
+                connectJob = scope.launch { connect(profileId) }
             }
 
-            Actions.ACTION_DISCONNECT -> stopTunnel()
+            Actions.ACTION_DISCONNECT -> {
+                requestStopTunnel()
+            }
         }
         return START_NOT_STICKY
     }
@@ -69,7 +83,7 @@ class TunnelVpnService : VpnService(), TunProvider {
 
     private suspend fun connect(profileId: String?) {
         AppLogger.i(TAG, "connect requested (profileId=$profileId)")
-        val settings: AppSettings = settingsStore.current()
+        val settings: AppSettings = settingsStore.current().normalized()
         val known = profileStore.all()
         val profile: Profile? = if (profileId != null) {
             known.firstOrNull { it.id == profileId }
@@ -99,12 +113,17 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
 
         activeProfileName = profile.displayName
-        showNotification(getString(R.string.status_starting))
+        withContext(Dispatchers.Main) {
+            showNotification(getString(R.string.status_starting))
+        }
 
+        val safeMtu = if (settings.mtu in 1280..1500) settings.mtu else 1500
         val engine = Engines.obtain()
         try {
-            engine.start(activeProfileName, config, settings.mtu) { openTun(settings) }
-            showNotification(getString(R.string.status_started) + " · " + activeProfileName)
+            engine.start(activeProfileName, config, safeMtu) { openTun(settings) }
+            withContext(Dispatchers.Main) {
+                showNotification(getString(R.string.status_started) + " · " + activeProfileName)
+            }
             logJob?.cancel()
             logJob = scope.launch {
                 engine.logs.collect { line ->
@@ -136,9 +155,11 @@ class TunnelVpnService : VpnService(), TunProvider {
             return false
         }
 
+        val safeMtu = if (settings.mtu in 1280..1500) settings.mtu else 1500
         val builder = Builder()
             .setSession(activeProfileName.ifBlank { getString(R.string.app_name) })
-            .setMtu(settings.mtu)
+            .setMtu(safeMtu)
+            .setBlocking(false)
 
         if (settings.routeMode != "direct") {
             builder.addAddress("172.19.0.1", 30)
@@ -171,7 +192,7 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
 
         return try {
-            interfaceFd?.close()
+            runCatching { interfaceFd?.close() }
             val fd = builder.establish()
             if (fd == null) {
                 stopWithMessage(getString(R.string.error_tun))
@@ -190,28 +211,60 @@ class TunnelVpnService : VpnService(), TunProvider {
     /**
      * Returns the raw file descriptor for the TUN interface.
      * Note: sing-box `libbox` duplicates (`dup(fd)`) this descriptor internally,
-     * so we keep [interfaceFd] open until [stopTunnel] is called.
+     * so we keep [interfaceFd] open until [requestStopTunnel] is called.
      */
     override fun tunFileDescriptor(): Int = interfaceFd?.fd ?: -1
 
     override fun protectSocket(fd: Int): Boolean = protect(fd)
 
-    private fun stopTunnel() {
-        AppLogger.i(TAG, "stopTunnel called")
-        runCatching { Engines.active.value?.stop() }
+    /**
+     * Asynchronously stops the VPN tunnel off the main thread so the UI never freezes or ANRs.
+     * Closes `interfaceFd` FIRST so sing-box's TUN reader wakes up immediately.
+     */
+    private fun requestStopTunnel() {
+        if (!isStopping.compareAndSet(false, true)) {
+            return
+        }
+        AppLogger.i(TAG, "requestStopTunnel: transitioning to STOPPING")
+        connectJob?.cancel()
+        connectJob = null
         logJob?.cancel()
         logJob = null
-        runCatching { interfaceFd?.close() }
-        interfaceFd = null
-        releaseWakeLock()
-        isServiceAlive = false
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        sendBroadcast(Intent(Actions.ACTION_STATE_CHANGED).setPackage(packageName))
-        stopSelf()
+
+        val engine = Engines.active.value
+        if (engine != null) {
+            engine.status.value = engine.status.value.copy(state = TunnelState.STOPPING)
+        }
+
+        scope.launch(Dispatchers.IO) {
+            // 1. Close TUN ParcelFileDescriptor FIRST (just like BoxService.stopService)
+            val pfd = interfaceFd
+            interfaceFd = null
+            runCatching { pfd?.close() }
+
+            // 2. Stop LibboxEngine on IO thread
+            runCatching { engine?.stop() }
+
+            // 3. Release WakeLock & stop service on Main thread
+            releaseWakeLock()
+            isServiceAlive = false
+            withContext(Dispatchers.Main) {
+                runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+                runCatching {
+                    sendBroadcast(Intent(Actions.ACTION_STATE_CHANGED).setPackage(packageName))
+                }
+                runCatching { stopSelf() }
+            }
+        }
     }
 
     private fun stopWithMessage(message: String) {
         AppLogger.e(TAG, "tunnel stopped with error: $message")
+        val pfd = interfaceFd
+        interfaceFd = null
+        runCatching { pfd?.close() }
+        runCatching { Engines.active.value?.stop() }
+
         val engine = Engines.active.value
         if (engine != null) {
             engine.status.value = TunnelStatus(
@@ -220,23 +273,37 @@ class TunnelVpnService : VpnService(), TunProvider {
                 message = message,
             )
         }
-        showNotification(message, error = true)
-        runCatching { interfaceFd?.close() }
-        interfaceFd = null
         releaseWakeLock()
-        sendBroadcast(Intent(Actions.ACTION_STATE_CHANGED).setPackage(packageName))
-        stopSelf()
+        isServiceAlive = false
+        scope.launch(Dispatchers.Main) {
+            runCatching { showNotification(message, error = true) }
+            runCatching {
+                sendBroadcast(Intent(Actions.ACTION_STATE_CHANGED).setPackage(packageName))
+            }
+            runCatching { stopSelf() }
+        }
     }
 
     override fun onRevoke() {
         AppLogger.w(TAG, "VPN permission revoked by system")
-        stopTunnel()
+        requestStopTunnel()
     }
 
     override fun onDestroy() {
         isServiceAlive = false
         if (Engines.tunProvider === this) Engines.tunProvider = null
-        stopTunnel()
+        val pfd = interfaceFd
+        interfaceFd = null
+        runCatching { pfd?.close() }
+        releaseWakeLock()
+        if (!isStopping.get()) {
+            val engine = Engines.active.value
+            if (engine != null && engine.status.value.state != TunnelState.STOPPED) {
+                Thread {
+                    runCatching { engine.stop() }
+                }.start()
+            }
+        }
         scope.cancel()
         super.onDestroy()
     }

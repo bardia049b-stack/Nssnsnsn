@@ -3,7 +3,6 @@ package app.nebulabox.ui.screens
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,16 +13,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.Public
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -34,6 +38,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -44,6 +50,7 @@ import app.nebulabox.engine.Engines
 import app.nebulabox.engine.TunnelState
 import app.nebulabox.ui.NebulaViewModel
 import app.nebulabox.util.Formatters
+import app.nebulabox.util.IpLocationChecker
 
 @Composable
 fun HomeScreen(
@@ -54,6 +61,8 @@ fun HomeScreen(
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
+    val location by viewModel.endpointLocation.collectAsStateWithLifecycle()
+    val checkingLocation by viewModel.checkingLocation.collectAsStateWithLifecycle()
 
     val selected = profiles.firstOrNull { it.id == settings.selectedProfileId }
         ?: profiles.firstOrNull()
@@ -79,6 +88,9 @@ fun HomeScreen(
             profile = selected,
             state = status.state,
             message = status.message,
+            location = location,
+            checkingLocation = checkingLocation,
+            onRefreshLocation = { viewModel.refreshLocation() },
             onToggle = {
                 if (selected != null) viewModel.toggle(selected)
             },
@@ -154,6 +166,9 @@ private fun ConnectCard(
     profile: Profile?,
     state: TunnelState,
     message: String,
+    location: IpLocationChecker.EndpointLocation?,
+    checkingLocation: Boolean,
+    onRefreshLocation: () -> Unit,
     onToggle: () -> Unit,
     onPickProfile: () -> Unit,
 ) {
@@ -210,6 +225,14 @@ private fun ConnectCard(
                 textAlign = TextAlign.Center,
             )
 
+            if (running) {
+                ConnectedLocationBadge(
+                    location = location,
+                    checking = checkingLocation,
+                    onRefresh = onRefreshLocation,
+                )
+            }
+
             if (message.isNotBlank() && state == TunnelState.STOPPED) {
                 Text(
                     text = message,
@@ -240,6 +263,107 @@ private fun ConnectCard(
 
             TextButton(onClick = onPickProfile) {
                 Text(stringResource(R.string.action_change_profile))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectedLocationBadge(
+    location: IpLocationChecker.EndpointLocation?,
+    checking: Boolean,
+    onRefresh: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                if (location != null) {
+                    Text(
+                        text = location.flagEmoji,
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
+                    Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = location.countryName.ifBlank { location.countryCode },
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                            ) {
+                                Text(
+                                    text = "${location.delayMs} ms",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                )
+                            }
+                        }
+                        Text(
+                            text = buildString {
+                                append("IP: ${location.ip}")
+                                if (location.city.isNotBlank() &&
+                                    !location.city.equals(location.countryName, ignoreCase = true)
+                                ) {
+                                    append(" · ${location.city}")
+                                }
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    Icon(
+                        imageVector = Icons.Filled.Public,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Column {
+                        Text(
+                            text = if (checking) "Detecting exit IP & country…" else "Tap refresh to check exit IP & location",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+            }
+
+            if (checking) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                IconButton(
+                    onClick = onRefresh,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = "Refresh IP Location",
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
             }
         }
     }
