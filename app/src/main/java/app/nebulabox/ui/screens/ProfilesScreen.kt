@@ -59,7 +59,6 @@ import app.nebulabox.ui.dialogs.ConfirmActionDialog
 import app.nebulabox.ui.dialogs.ImportConfigDialog
 import app.nebulabox.ui.dialogs.QrCodeDialog
 import app.nebulabox.ui.dialogs.QrScanDialog
-import app.nebulabox.ui.dialogs.SpeedTestSheet
 import app.nebulabox.ui.dialogs.ShareProfileDialog
 import app.nebulabox.ui.dialogs.SubscriptionsSheet
 import app.nebulabox.util.ClipboardHelper
@@ -85,7 +84,6 @@ fun ProfilesScreen(
     val isTestingActive by viewModel.checkingLocation.collectAsStateWithLifecycle()
     val activePingMs by viewModel.activeDelayMs.collectAsStateWithLifecycle()
     val exitIpInfo by viewModel.endpointLocation.collectAsStateWithLifecycle()
-    val speedTestState by viewModel.speedTestState.collectAsStateWithLifecycle()
     val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -212,17 +210,6 @@ fun ProfilesScreen(
             onImportUrlOrText = { showImportDialog = true },
             onScanQr = { showQrScanner = true },
             onImportQrImage = { imagePicker.launch("image/*") },
-            onSpeedTest = { viewModel.runSpeedTest() },
-            onOpenLeakTest = {
-                val opened = runCatching {
-                    context.startActivity(
-                        Intent(Intent.ACTION_VIEW, Uri.parse("https://browserleaks.com/webrtc")),
-                    )
-                }.isSuccess
-                if (!opened) {
-                    Toast.makeText(context, "No browser available", Toast.LENGTH_SHORT).show()
-                }
-            },
             onNewProtocol = onNewWithProtocol,
             onRestartService = { viewModel.restartTunnel() },
             onPingAllTcp = { viewModel.testAllTcpPing() },
@@ -586,16 +573,6 @@ fun ProfilesScreen(
             },
         )
     }
-
-    SpeedTestSheet(
-        state = speedTestState,
-        onRunAgain = { viewModel.runSpeedTest() },
-        onCopy = { summary ->
-            ClipboardHelper.copyText(context, "JavidTun Speed Test", summary)
-            Toast.makeText(context, "Result copied", Toast.LENGTH_SHORT).show()
-        },
-        onDismiss = { viewModel.dismissSpeedTest() },
-    )
 
     if (pendingDeleteIds.isNotEmpty()) {
         val count = pendingDeleteIds.size

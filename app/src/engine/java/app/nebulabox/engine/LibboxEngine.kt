@@ -116,13 +116,14 @@ class LibboxEngine : TunnelEngine {
 
     private fun copyGeoAssetsIfNeeded(context: Context, targetDir: File, force: Boolean) {
         val geoFiles = listOf(
-            "geosite.dat" to 5_000_000L,
-            "geoip.dat" to 5_000_000L,
-            "geoip-only-cn-private.dat" to 50_000L,
+            Triple("geosite.dat", 5_000_000L, 12_000_000L),
+            Triple("geoip.dat", 1_000_000L, 3_000_000L),
+            Triple("geoip-only-cn-private.dat", 100_000L, 1_000_000L),
         )
-        for ((name, minBytes) in geoFiles) {
+        for ((name, minBytes, maxBytes) in geoFiles) {
             val outFile = File(targetDir, name)
-            if (!force && outFile.exists() && outFile.length() >= minBytes) continue
+            val existing = if (outFile.exists()) outFile.length() else 0L
+            if (!force && existing >= minBytes && existing <= maxBytes) continue
             val tmpFile = File(targetDir, "$name.tmp")
             runCatching {
                 context.assets.open(name).use { input ->
