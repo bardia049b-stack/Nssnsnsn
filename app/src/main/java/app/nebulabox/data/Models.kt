@@ -116,7 +116,30 @@ data class SubscriptionItem(
     val enabled: Boolean = true,
     val updatedAt: Long = 0L,
     val userAgent: String = "",
-)
+    val uploadBytes: Long = 0L,
+    val downloadBytes: Long = 0L,
+    val totalBytes: Long = 0L,
+    val expireAtSeconds: Long = 0L,
+) {
+    val usedBytes: Long get() = uploadBytes + downloadBytes
+
+    val hasQuota: Boolean get() = totalBytes > 0L
+
+    val quotaFraction: Float
+        get() = if (!hasQuota) 0f else (usedBytes.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+
+    val isQuotaExhausted: Boolean get() = hasQuota && usedBytes >= totalBytes
+
+    val isExpired: Boolean
+        get() = expireAtSeconds > 0L && System.currentTimeMillis() / 1000L > expireAtSeconds
+
+    val daysLeft: Int
+        get() = if (expireAtSeconds <= 0L) {
+            Int.MAX_VALUE
+        } else {
+            ((expireAtSeconds - System.currentTimeMillis() / 1000L) / 86400L).toInt()
+        }
+}
 
 @Serializable
 data class Profile(

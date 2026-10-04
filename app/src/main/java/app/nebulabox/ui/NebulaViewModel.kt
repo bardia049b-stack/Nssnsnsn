@@ -6,6 +6,7 @@ import android.net.VpnService
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import app.nebulabox.BuildConfig
 import app.nebulabox.automation.AutomationNotifications
 import app.nebulabox.automation.AutomationScheduler
 import app.nebulabox.automation.ReleaseChecker
@@ -21,11 +22,13 @@ import app.nebulabox.engine.OutboundGroup
 import app.nebulabox.engine.TunnelEngine
 import app.nebulabox.engine.TunnelState
 import app.nebulabox.engine.TunnelStatus
+import app.nebulabox.R
 import app.nebulabox.service.Actions
 import app.nebulabox.util.AppLogger
 import app.nebulabox.util.IpLocationChecker
 import app.nebulabox.util.ShareLinkParser
-import app.nebulabox.util.SpeedTester
+import app.nebulabox.util.ConnectionProbe
+import app.nebulabox.util.SubscriptionUsage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -125,8 +128,10 @@ class NebulaViewModel(
 
     private val pendingConnectId = MutableStateFlow<String?>(null)
 
-    private val _speedTestState = MutableStateFlow<SpeedTestState?>(null)
-    val speedTestState: StateFlow<SpeedTestState?> = _speedTestState.asStateFlow()
+    private var healthJob: Job? = null
+
+    private val _connectionHealth = MutableStateFlow(ConnectionHealth())
+    val connectionHealth: StateFlow<ConnectionHealth> = _connectionHealth.asStateFlow()
 
     private val _availableUpdate = MutableStateFlow<ReleaseChecker.UpdateInfo?>(null)
     val availableUpdate: StateFlow<ReleaseChecker.UpdateInfo?> = _availableUpdate.asStateFlow()
@@ -148,13 +153,15 @@ class NebulaViewModel(
                     if (state == TunnelState.STARTED) {
                         _activeTestError.value = null
                         fetchExitLocationQuietly()
+                        verifyConnection()
                     } else {
+                        healthJob?.cancel()
+                        _connectionHealth.value = ConnectionHealth()
                         locationJob?.cancel()
                         _checkingLocation.value = false
                         _endpointLocation.value = null
                         _activeDelayMs.value = null
                         _activeTestError.value = null
-                        _speedTestState.value = null
                     }
                 }
         }
@@ -744,9 +751,13 @@ class NebulaViewModel(
                         updatedAt = System.currentTimeMillis(),
                     )
                     profileStore.upsertSubscription(sub)
-                    val body = fetchUrlContent(cleanUrl)
+                    val fetched = fetchSubscription(cleanUrl)
+                    val body = fetched.body
+                    if (!body.isNullOrBlank()) {
+                        profileStore.upsertSubscription(SubscriptionUsage.applyTo(sub, fetched.quota))
+                    }
                     if (body.isNullOrBlank()) {
-                        snack.emit("Saved subscription '$name', but failed to fetch URL")
+                        snack.emit(application.getString(R.string.subscription_fetch_failed, name))
                         return@withContext
                     }
                     val parsed = runCatching { ShareLinkParser.parseMany(body) }.getOrDefault(emptyList())
@@ -758,9 +769,11 @@ class NebulaViewModel(
                                 selectedProfileId = if (it.selectedProfileId.isNullOrBlank()) parsed.first().id else it.selectedProfileId,
                             )
                         }
-                        snack.emit("Subscription '$name': imported ${parsed.size} configuration(s)")
+                        snack.emit(
+                            application.getString(R.string.subscription_imported, name, parsed.size),
+                        )
                     } else {
-                        snack.emit("Subscription '$name' returned 0 valid configurations")
+                        snack.emit(application.getString(R.string.subscription_empty, name))
                     }
                 }
             } finally {
@@ -777,22 +790,37 @@ class NebulaViewModel(
                 withContext(Dispatchers.IO) {
                     val subs = profileStore.allSubscriptions().filter { it.enabled }
                     if (subs.isEmpty()) {
-                        snack.emit("No subscriptions configured")
+                        snack.emit(application.getString(R.string.subscriptions_none))
                         return@withContext
                     }
                     var updatedSubs = 0
                     var totalProfiles = 0
                     for (sub in subs) {
-                        val body = fetchUrlContent(sub.url) ?: continue
+                        val fetched = fetchSubscription(sub.url)
+                        val body = fetched.body ?: continue
                         val parsed = runCatching { ShareLinkParser.parseMany(body) }.getOrDefault(emptyList())
                         if (parsed.isNotEmpty()) {
                             profileStore.replaceSubscriptionProfiles(sub.id, sub.url, parsed)
-                            profileStore.upsertSubscription(sub.copy(updatedAt = System.currentTimeMillis()))
+                            profileStore.upsertSubscription(
+                                SubscriptionUsage.applyTo(
+                                    sub.copy(updatedAt = System.currentTimeMillis()),
+                                    fetched.quota,
+                                ),
+                            )
                             updatedSubs++
                             totalProfiles += parsed.size
+                        } else {
+                            profileStore.upsertSubscription(SubscriptionUsage.applyTo(sub, fetched.quota))
                         }
                     }
-                    snack.emit("Updated $updatedSubs/${subs.size} subscription(s) ($totalProfiles configurations)")
+                    snack.emit(
+                        application.getString(
+                            R.string.subscriptions_updated,
+                            updatedSubs,
+                            subs.size,
+                            totalProfiles,
+                        ),
+                    )
                 }
             } finally {
                 _updatingSubscriptions.value = false
@@ -806,7 +834,50 @@ class NebulaViewModel(
             if (settings.value.selectedSubscriptionId == subId) {
                 settingsStore.update { it.copy(selectedSubscriptionId = "") }
             }
-            snack.emit("Subscription deleted")
+            snack.emit(application.getString(R.string.subscription_deleted))
+        }
+    }
+
+    private data class SubscriptionFetch(val body: String?, val quota: SubscriptionUsage.Quota?)
+
+    private suspend fun fetchSubscription(urlStr: String): SubscriptionFetch = withContext(Dispatchers.IO) {
+        val currentSettings = settingsStore.current().normalized()
+        val proxy = if (status.value.state == TunnelState.STARTED) {
+            Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", currentSettings.socksPort))
+        } else {
+            Proxy.NO_PROXY
+        }
+        if (proxy == Proxy.NO_PROXY) {
+            httpFetchWithQuota(urlStr, proxy) ?: SubscriptionFetch(null, null)
+        } else {
+            httpFetchWithQuota(urlStr, proxy)
+                ?: httpFetchWithQuota(urlStr, Proxy.NO_PROXY)
+                ?: SubscriptionFetch(null, null)
+        }
+    }
+
+    private fun httpFetchWithQuota(urlStr: String, proxy: Proxy): SubscriptionFetch? {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(urlStr).openConnection(proxy) as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 10000
+                readTimeout = 15000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "JavidTun/${BuildConfig.VERSION_NAME}")
+                setRequestProperty("Accept", "*/*")
+            }
+            if (conn.responseCode !in 200..299) return null
+            val headers = conn.headerFields
+                .filterKeys { it != null }
+                .mapValues { entry -> entry.value ?: emptyList<String>() }
+            val quota = SubscriptionUsage.parse(headers)
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            SubscriptionFetch(body, quota)
+        } catch (_: Throwable) {
+            null
+        } finally {
+            runCatching { conn?.disconnect() }
         }
     }
 
@@ -842,6 +913,118 @@ class NebulaViewModel(
         }
     }
 
+    fun refreshSubscription(subId: String) {
+        if (subId.isBlank()) return
+        viewModelScope.launch {
+            val sub = subscriptions.value.firstOrNull { it.id == subId } ?: return@launch
+            withContext(Dispatchers.IO) {
+                val fetched = fetchSubscription(sub.url)
+                val quota = fetched.quota
+                if (quota == null) return@withContext
+                var updated = SubscriptionUsage.applyTo(sub, quota)
+                val body = fetched.body
+                if (!body.isNullOrBlank()) {
+                    val parsed = runCatching { ShareLinkParser.parseMany(body) }.getOrDefault(emptyList())
+                    if (parsed.isNotEmpty()) {
+                        profileStore.replaceSubscriptionProfiles(sub.id, sub.url, parsed)
+                        updated = updated.copy(updatedAt = System.currentTimeMillis())
+                    }
+                }
+                profileStore.upsertSubscription(updated)
+            }
+            if (!settings.value.selectedProfileId.isNullOrBlank()) {
+                verifyConnection()
+            }
+        }
+    }
+
+    private fun verifyConnection() {
+        healthJob?.cancel()
+        healthJob = viewModelScope.launch(Dispatchers.IO) {
+            _connectionHealth.value = ConnectionHealth(phase = HealthPhase.CHECKING)
+            val currentSettings = settingsStore.current().normalized()
+            val selected = profiles.value.firstOrNull { it.id == currentSettings.selectedProfileId }
+                ?: profiles.value.firstOrNull()
+            val subscription = selected
+                ?.takeIf { it.subscriptionId.isNotBlank() }
+                ?.let { profile -> subscriptions.value.firstOrNull { it.id == profile.subscriptionId } }
+
+            val result = ConnectionProbe.verifyThroughProxy(
+                proxyPort = currentSettings.socksPort,
+                testUrls = listOf(
+                    currentSettings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" },
+                    "http://cp.cloudflare.com/generate_204",
+                ),
+            )
+
+            val exhausted = subscription != null && (subscription.isQuotaExhausted || subscription.isExpired)
+            val failure = if (!result.reachable && exhausted) ConnectionProbe.Failure.QUOTA else result.failure
+
+            if (result.reachable) {
+                _connectionHealth.value = ConnectionHealth(
+                    phase = HealthPhase.ONLINE,
+                    delayMs = result.delayMs,
+                    checkedAt = System.currentTimeMillis(),
+                )
+                _activeDelayMs.value = result.delayMs
+                _activeTestError.value = null
+                selected?.let { profileStore.updateDelays(mapOf(it.id to result.delayMs.toInt())) }
+                return@launch
+            }
+
+            val logEvidence = logs.replayCache
+                .takeLast(40)
+                .lastOrNull { ConnectionProbe.looksLikeCoreEof(it.message) }
+                ?.message
+                .orEmpty()
+
+            _connectionHealth.value = ConnectionHealth(
+                phase = if (exhausted) HealthPhase.EXHAUSTED else HealthPhase.NO_TRAFFIC,
+                failure = failure,
+                detail = when {
+                    exhausted && subscription?.isExpired == true -> application.getString(R.string.failure_subscription_expired)
+                    exhausted -> application.getString(R.string.failure_quota)
+                    result.detail.isNotBlank() -> result.detail
+                    else -> logEvidence
+                },
+                delayMs = -1L,
+                checkedAt = System.currentTimeMillis(),
+            )
+            _activeDelayMs.value = -1L
+            _activeTestError.value = summarizeFailure(failure, subscription?.remarks.orEmpty())
+
+            if (exhausted) {
+                disconnect()
+            }
+        }
+    }
+
+    private fun summarizeFailure(failure: ConnectionProbe.Failure, subName: String): String {
+        val suffix = if (subName.isBlank()) "" else " ($subName)"
+        val base = when (failure) {
+            ConnectionProbe.Failure.QUOTA -> R.string.failure_quota
+            ConnectionProbe.Failure.SERVER_CLOSED -> R.string.failure_server_closed
+            ConnectionProbe.Failure.HANDSHAKE -> R.string.failure_handshake
+            ConnectionProbe.Failure.TIMEOUT -> R.string.failure_timeout
+            ConnectionProbe.Failure.REFUSED -> R.string.failure_refused
+            ConnectionProbe.Failure.DNS -> R.string.failure_dns
+            ConnectionProbe.Failure.NONE -> 0
+            ConnectionProbe.Failure.UNKNOWN -> R.string.failure_no_traffic
+        }
+        if (base == 0) return ""
+        return application.getString(base) + suffix
+    }
+
+    enum class HealthPhase { IDLE, CHECKING, ONLINE, NO_TRAFFIC, EXHAUSTED }
+
+    data class ConnectionHealth(
+        val phase: HealthPhase = HealthPhase.IDLE,
+        val failure: ConnectionProbe.Failure = ConnectionProbe.Failure.NONE,
+        val detail: String = "",
+        val delayMs: Long = 0L,
+        val checkedAt: Long = 0L,
+    )
+
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch {
             val before = settingsStore.current()
@@ -869,7 +1052,13 @@ class NebulaViewModel(
             val newer = info != null && ReleaseChecker.isNewer(info)
             _availableUpdate.value = if (newer) info else null
             if (manual) {
-                showSnack(if (newer) "Update ${info?.tag} is available" else "JavidTun is up to date")
+                showSnack(
+                    if (newer) {
+                        application.getString(R.string.update_available_snack, info?.tag.orEmpty())
+                    } else {
+                        application.getString(R.string.release_up_to_date)
+                    },
+                )
             }
         }
     }
@@ -877,50 +1066,6 @@ class NebulaViewModel(
     fun dismissUpdateBanner() {
         _availableUpdate.value = null
     }
-
-    fun runSpeedTest() {
-        if (status.value.state != TunnelState.STARTED) {
-            showSnack("Connect the tunnel first")
-            return
-        }
-        if (_speedTestState.value?.running == true) return
-
-        viewModelScope.launch {
-            val currentSettings = settingsStore.current().normalized()
-            _speedTestState.value = SpeedTestState(running = true, location = _endpointLocation.value)
-            val outcome = withContext(Dispatchers.IO) {
-                val location = IpLocationChecker.fetchLocation(currentSettings.socksPort)
-                val result = SpeedTester.measure(currentSettings.socksPort)
-                location to result
-            }
-            val location = outcome.first
-            val result = outcome.second
-            if (location != null) {
-                _endpointLocation.value = location
-            }
-            _speedTestState.value = SpeedTestState(
-                running = false,
-                location = location ?: _endpointLocation.value,
-                downloadMbps = result?.downloadMbps,
-                transferred = result?.sizeDisplay.orEmpty(),
-                error = if (result == null) "Speed test did not finish" else null,
-                testedAt = System.currentTimeMillis(),
-            )
-        }
-    }
-
-    fun dismissSpeedTest() {
-        _speedTestState.value = null
-    }
-
-    data class SpeedTestState(
-        val running: Boolean,
-        val location: IpLocationChecker.EndpointLocation? = null,
-        val downloadMbps: Double? = null,
-        val transferred: String = "",
-        val error: String? = null,
-        val testedAt: Long = 0L,
-    )
 
     fun selectOutbound(groupTag: String, itemTag: String) {
         Engines.active.value?.selectOutbound(groupTag, itemTag)

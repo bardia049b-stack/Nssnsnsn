@@ -2,8 +2,8 @@ package app.nebulabox.locale
 
 import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.res.Configuration
-import android.os.Build
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.os.LocaleListCompat
 import app.nebulabox.Application
@@ -17,34 +17,53 @@ object LocaleManager {
     const val ENGLISH = "en"
     const val PERSIAN = "fa"
 
-    fun storedLanguage(): String =
-        Application.instance.prefs.getString(KEY_LANGUAGE, SYSTEM) ?: SYSTEM
+    fun isSupported(code: String): Boolean = code == SYSTEM || code == ENGLISH || code == PERSIAN
+
+    fun storedLanguage(): String {
+        val raw = Application.instance.prefs.getString(KEY_LANGUAGE, null)
+        return if (raw != null && isSupported(raw)) raw else SYSTEM
+    }
 
     fun storeLanguage(context: Context, code: String) {
-        Application.instance.prefs.edit().putString(KEY_LANGUAGE, code).apply()
-        applyLocale(context, code)
+        val clean = if (isSupported(code)) code else SYSTEM
+        Application.instance.prefs.edit().putString(KEY_LANGUAGE, clean).apply()
+        applyLocale(clean)
     }
 
     fun applyStoredLocale(context: Context) {
-        applyLocale(context, storedLanguage())
+        applyLocale(storedLanguage())
     }
 
-    private fun applyLocale(context: Context, code: String) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val locales = if (code == SYSTEM) {
-                LocaleListCompat.getEmptyLocaleList()
-            } else {
-                LocaleListCompat.forLanguageTags(code)
-            }
-            AppCompatDelegate.setApplicationLocales(locales)
+    fun applyLocale(code: String) {
+        val locales = if (code == SYSTEM) {
+            LocaleListCompat.getEmptyLocaleList()
+        } else {
+            LocaleListCompat.forLanguageTags(code)
         }
+        AppCompatDelegate.setApplicationLocales(locales)
+        if (code == SYSTEM) {
+            Locale.setDefault(Locale.getDefault())
+        } else {
+            Locale.setDefault(Locale(code))
+        }
+    }
+
+    fun resolvedCode(context: Context): String {
+        val stored = storedLanguage()
+        if (stored != SYSTEM) return stored
+        val fromConfig = context.resources.configuration.locales?.get(0)?.language
+        return fromConfig ?: Locale.getDefault().language
+    }
+
+    fun isPersian(context: Context): Boolean {
+        val code = resolvedCode(context)
+        return code == "fa" || code == "prs" || code == "pes"
     }
 
     @Suppress("DEPRECATION")
     fun wrap(context: Context): Context {
         val code = storedLanguage()
         if (code == SYSTEM) return context
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return context
 
         val locale = Locale(code)
         Locale.setDefault(locale)
@@ -54,20 +73,14 @@ object LocaleManager {
         return context.createConfigurationContext(config)
     }
 
-    fun isRtl(context: Context): Boolean {
-        val code = storedLanguage()
-        return if (code == SYSTEM) {
-            val default = Locale.getDefault()
-            default.language == "fa" || default.language == "ar" || default.language == "he"
-        } else {
-            code == "fa"
+    fun restart(context: Context) {
+        var current: Context? = context
+        while (current is ContextWrapper) {
+            if (current is Activity) {
+                current.recreate()
+                return
+            }
+            current = current.baseContext
         }
-    }
-
-    fun currentTag(activity: Activity): String {
-        val code = storedLanguage()
-        if (code != SYSTEM) return code
-        return activity.resources.configuration.locales?.get(0)?.language
-            ?: Locale.getDefault().language
     }
 }

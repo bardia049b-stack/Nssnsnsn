@@ -25,9 +25,11 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.nebulabox.R
 import app.nebulabox.data.Profile
 import app.nebulabox.data.SubscriptionItem
 
@@ -41,10 +43,11 @@ fun SubscriptionGroupBar(
     onPingAll: () -> Unit = {},
     onSortByPing: () -> Unit = {},
 ) {
-    val tabs = remember(subscriptions, profiles) {
+    val allLabel = stringResource(R.string.group_all)
+    val tabs = remember(subscriptions, profiles, allLabel) {
         buildList {
             val manualCount = profiles.count { it.subscriptionId.isBlank() }
-            add(Triple("", "All", manualCount))
+            add(Triple("", allLabel, manualCount))
             subscriptions.forEach { sub ->
                 val count = profiles.count { it.subscriptionId == sub.id }
                 add(Triple(sub.id, sub.remarks, count))
@@ -53,7 +56,7 @@ fun SubscriptionGroupBar(
     }
 
     val activeGroupTitle = remember(tabs, selectedSubId) {
-        tabs.firstOrNull { it.first == selectedSubId }?.second ?: "All"
+        tabs.firstOrNull { it.first == selectedSubId }?.second ?: allLabel
     }
 
     Column(modifier = Modifier.fillMaxWidth()) {

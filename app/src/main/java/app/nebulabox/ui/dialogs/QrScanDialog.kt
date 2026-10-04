@@ -25,21 +25,22 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.nebulabox.R
+import app.nebulabox.util.QrFrameDecoder
+import app.nebulabox.util.QrImageDecoder
+import kotlinx.coroutines.launch
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.barcode.BarcodeScanner
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -58,58 +59,40 @@ fun QrScanDialog(
     var scanMessage by remember { mutableStateOf<String?>(null) }
     val delivered = remember { AtomicBoolean(false) }
     val scanningActive = remember { AtomicBoolean(true) }
-    val scanner = remember {
-        val options = BarcodeScannerOptions.Builder()
-            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
-            .build()
-        BarcodeScanning.getClient(options)
-    }
+    val scope = rememberCoroutineScope()
     val currentOnScanned by rememberUpdatedState(onScanned)
 
-    DisposableEffect(scanner) {
-        onDispose {
-            scanningActive.set(false)
-            scanner.close()
-        }
+    DisposableEffect(Unit) {
+        onDispose { scanningActive.set(false) }
     }
 
     val cameraPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         cameraPermissionGranted = granted
-        if (!granted) scanMessage = "Camera access was not granted. You can still scan an image from your gallery."
+        if (!granted) scanMessage = context.getString(R.string.qr_camera_denied)
     }
 
     val galleryLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent(),
     ) { uri ->
         if (uri != null) {
-            scanMessage = "Reading QR code…"
-            runCatching { InputImage.fromFilePath(context, uri) }
-                .onSuccess { image ->
-                    scanner.process(image)
-                        .addOnSuccessListener { barcodes ->
-                            val value = barcodes.firstNotNullOfOrNull { barcode -> barcode.rawValue?.takeIf { it.isNotBlank() } }
-                            if (value != null && scanningActive.get() && delivered.compareAndSet(false, true)) {
-                                currentOnScanned(value)
-                            } else if (value == null) {
-                                scanMessage = "No QR code was found in this image."
-                            }
-                        }
-                        .addOnFailureListener {
-                            scanMessage = "Could not read a QR code from this image."
-                        }
+            scanMessage = context.getString(R.string.qr_reading)
+            scope.launch {
+                val value = QrImageDecoder.decode(context, uri)
+                if (value != null && scanningActive.get() && delivered.compareAndSet(false, true)) {
+                    currentOnScanned(value)
+                } else if (value == null) {
+                    scanMessage = context.getString(R.string.qr_not_found)
                 }
-                .onFailure {
-                    scanMessage = "Could not open this image."
-                }
+            }
         }
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(22.dp),
-        title = { Text("Scan QR code") },
+        title = { Text(stringResource(R.string.scan_qr_code)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (cameraPermissionGranted) {
@@ -121,7 +104,6 @@ fun QrScanDialog(
                         contentAlignment = Alignment.Center,
                     ) {
                         CameraQrPreview(
-                            scanner = scanner,
                             onScanned = { value ->
                                 if (scanningActive.get() && delivered.compareAndSet(false, true)) {
                                     currentOnScanned(value)
@@ -137,7 +119,7 @@ fun QrScanDialog(
                     )
                 } else {
                     Text(
-                        text = scanMessage ?: "Allow camera access to scan a QR code, or choose an image from your gallery.",
+                        text = scanMessage ?: stringResource(R.string.qr_camera_hint),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -169,7 +151,6 @@ fun QrScanDialog(
 
 @Composable
 private fun CameraQrPreview(
-    scanner: BarcodeScanner,
     onScanned: (String) -> Unit,
     onError: (String) -> Unit,
 ) {
@@ -185,13 +166,13 @@ private fun CameraQrPreview(
     var cameraProvider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
     var analysisUseCase by remember { mutableStateOf<ImageAnalysis?>(null) }
 
-    DisposableEffect(lifecycleOwner, scanner) {
+    DisposableEffect(lifecycleOwner) {
         val providerFuture = ProcessCameraProvider.getInstance(context)
         providerFuture.addListener(
             {
                 val provider = runCatching { providerFuture.get() }.getOrNull()
                 if (provider == null) {
-                    currentOnError("Camera is unavailable on this device.")
+                    currentOnError(context.getString(R.string.qr_camera_unavailable))
                     return@addListener
                 }
                 val preview = Preview.Builder().build().also {
@@ -201,27 +182,10 @@ private fun CameraQrPreview(
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                 analysis.setAnalyzer(executor) { imageProxy ->
-                    val mediaImage = imageProxy.image
-                    if (mediaImage == null) {
-                        imageProxy.close()
-                    } else {
-                        val inputImage = InputImage.fromMediaImage(
-                            mediaImage,
-                            imageProxy.imageInfo.rotationDegrees,
-                        )
-                        scanner.process(inputImage)
-                            .addOnSuccessListener { barcodes ->
-                                val value = barcodes.firstNotNullOfOrNull { barcode ->
-                                    barcode.rawValue?.takeIf { it.isNotBlank() }
-                                }
-                                if (value != null && delivered.compareAndSet(false, true)) {
-                                    currentOnScanned(value)
-                                }
-                            }
-                            .addOnFailureListener {
-                                currentOnError("Camera scan failed. Try choosing an image instead.")
-                            }
-                            .addOnCompleteListener { imageProxy.close() }
+                    val value = QrFrameDecoder.decode(imageProxy)
+                    imageProxy.close()
+                    if (value != null && delivered.compareAndSet(false, true)) {
+                        currentOnScanned(value)
                     }
                 }
                 runCatching {
@@ -235,7 +199,7 @@ private fun CameraQrPreview(
                     cameraProvider = provider
                     analysisUseCase = analysis
                 }.onFailure {
-                    currentOnError("Could not start the camera preview.")
+                    currentOnError(context.getString(R.string.qr_camera_preview_failed))
                 }
             },
             ContextCompat.getMainExecutor(context),

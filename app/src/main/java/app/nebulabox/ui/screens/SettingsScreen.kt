@@ -1,5 +1,6 @@
 package app.nebulabox.ui.screens
 
+import android.os.Build
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Column
@@ -429,6 +430,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 onSelected = { code ->
                     viewModel.updateSettings { it.copy(language = code) }
                     LocaleManager.storeLanguage(context, code)
+                    LocaleManager.restart(context)
                 },
             )
             SettingsListRow(
@@ -441,12 +443,20 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 selectedValue = s.theme,
                 onSelected = { v -> viewModel.updateSettings { it.copy(theme = v) } },
             )
-            SettingsSwitchRow(
-                title = stringResource(R.string.setting_dynamic_color),
-                summary = "Use Material You wallpaper colors on Android 12+",
-                checked = s.dynamicColor,
-                onCheckedChange = { v -> viewModel.updateSettings { it.copy(dynamicColor = v) } },
-            )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                SettingsSwitchRow(
+                    title = stringResource(R.string.setting_dynamic_color),
+                    summary = stringResource(R.string.use_material_you_wallpaper_colors_on_android_12),
+                    checked = s.dynamicColor,
+                    onCheckedChange = { v -> viewModel.updateSettings { it.copy(dynamicColor = v) } },
+                )
+            } else {
+                SettingsMenuRow(
+                    title = stringResource(R.string.setting_dynamic_color),
+                    subtitle = stringResource(R.string.dynamic_color_unsupported),
+                    onClick = {},
+                )
+            }
             SettingsListRow(
                 title = stringResource(R.string.setting_log_level),
                 options = listOf(

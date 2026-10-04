@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PowerSettingsNew
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -28,12 +29,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.nebulabox.R
 import app.nebulabox.engine.TunnelState
 import app.nebulabox.engine.TunnelStatus
+import app.nebulabox.ui.NebulaViewModel
 import app.nebulabox.ui.colorPing
 import app.nebulabox.ui.colorPingRed
 import app.nebulabox.util.Formatters
@@ -47,28 +52,49 @@ fun ConnectionDock(
     isTestingActive: Boolean,
     testingProgress: Pair<Int, Int>?,
     exitIpInfo: IpLocationChecker.EndpointLocation?,
+    health: NebulaViewModel.ConnectionHealth,
     onTestCurrentServer: () -> Unit,
     onToggleService: () -> Unit,
 ) {
-    val isRunning = status.state == TunnelState.STARTED
-    val isBusy = status.state == TunnelState.STARTING || status.state == TunnelState.STOPPING
+    val running = status.state == TunnelState.STARTED
+    val busy = status.state == TunnelState.STARTING || status.state == TunnelState.STOPPING
+    val verified = running && health.phase == NebulaViewModel.HealthPhase.ONLINE
+    val failed = running && (
+        health.phase == NebulaViewModel.HealthPhase.NO_TRAFFIC ||
+            health.phase == NebulaViewModel.HealthPhase.EXHAUSTED
+        )
 
     val statusText = when {
         testingProgress != null -> {
             val left = (testingProgress.second - testingProgress.first).coerceAtLeast(0)
-            "Testing servers ($left / ${testingProgress.second})"
+            stringResource(R.string.status_testing_servers, left, testingProgress.second)
         }
-        isTestingActive -> "Checking connection..."
-        status.state == TunnelState.STARTED -> "Connected"
-        status.state == TunnelState.STARTING -> "Connecting..."
-        status.state == TunnelState.STOPPING -> "Disconnecting..."
-        else -> "Disconnected"
+        isTestingActive -> stringResource(R.string.status_checking)
+        !running && busy -> stringResource(R.string.status_connecting)
+        !running -> stringResource(R.string.status_disconnected)
+        verified -> stringResource(R.string.status_verified)
+        failed -> {
+            if (health.phase == NebulaViewModel.HealthPhase.EXHAUSTED) {
+                stringResource(R.string.status_quota_done)
+            } else {
+                stringResource(R.string.status_no_traffic)
+            }
+        }
+        health.phase == NebulaViewModel.HealthPhase.CHECKING -> stringResource(R.string.status_verifying)
+        else -> stringResource(R.string.status_checking)
     }
 
-    val containerColor = if (isRunning) {
-        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-    } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+    val statusColor = when {
+        verified -> colorPing
+        failed -> colorPingRed
+        busy || (running && health.phase == NebulaViewModel.HealthPhase.CHECKING) -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outline
+    }
+
+    val containerColor = when {
+        verified -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+        failed -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
     }
 
     Surface(
@@ -81,52 +107,38 @@ fun ConnectionDock(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 18.dp, vertical = 16.dp),
+                .padding(horizontal = 18.dp, vertical = 15.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clickable(enabled = isRunning, onClick = onTestCurrentServer),
-                ) {
+                Column(modifier = Modifier.weight(1f)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(8.dp)
+                                .size(9.dp)
                                 .clip(CircleShape)
-                                .background(
-                                    when (status.state) {
-                                        TunnelState.STARTED -> colorPing
-                                        TunnelState.STARTING, TunnelState.STOPPING -> MaterialTheme.colorScheme.primary
-                                        TunnelState.STOPPED -> MaterialTheme.colorScheme.outline
-                                    },
-                                ),
+                                .background(statusColor),
                         )
                         Text(
                             text = statusText,
-                            style = MaterialTheme.typography.labelMedium,
+                            style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (isRunning) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
+                            color = if (verified || failed) statusColor else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
                     }
 
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(5.dp))
 
                     FlagText(
-                        text = activeProfileName?.ifBlank { "No server selected" } ?: "No server selected",
+                        text = activeProfileName?.ifBlank { stringResource(R.string.no_server_selected) }
+                            ?: stringResource(R.string.no_server_selected),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -139,19 +151,19 @@ fun ConnectionDock(
 
                 FilledIconButton(
                     onClick = {
-                        if (!isBusy) {
+                        if (!busy) {
                             onToggleService()
                         }
                     },
                     modifier = Modifier.size(52.dp),
                     shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = if (isRunning) {
+                        containerColor = if (running) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.secondaryContainer
                         },
-                        contentColor = if (isRunning) {
+                        contentColor = if (running) {
                             MaterialTheme.colorScheme.onPrimary
                         } else {
                             MaterialTheme.colorScheme.onSecondaryContainer
@@ -160,13 +172,55 @@ fun ConnectionDock(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.PowerSettingsNew,
-                        contentDescription = if (isRunning) "Disconnect" else "Connect",
+                        contentDescription = if (running) {
+                            stringResource(R.string.disconnect)
+                        } else {
+                            stringResource(R.string.connect)
+                        },
                         modifier = Modifier.size(24.dp),
                     )
                 }
             }
 
-            AnimatedVisibility(visible = isRunning) {
+            AnimatedVisibility(visible = failed) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = health.detail.ifBlank {
+                            if (health.phase == NebulaViewModel.HealthPhase.EXHAUSTED) {
+                                stringResource(R.string.status_quota_done)
+                            } else {
+                                stringResource(R.string.status_no_traffic_hint)
+                            }
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(onClick = onTestCurrentServer)
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    ) {
+                        Icon(
+                            imageVector = Icons.Outlined.Refresh,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(17.dp),
+                        )
+                        Text(
+                            text = stringResource(R.string.dock_tap_to_check),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+
+            AnimatedVisibility(visible = running && !failed) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -198,13 +252,13 @@ fun ConnectionDock(
                                 Text(
                                     text = "${exitIpInfo.countryName.ifBlank { exitIpInfo.countryCode }} · ${exitIpInfo.ip}",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             } else {
                                 Text(
-                                    text = if (isTestingActive) "Checking exit IP..." else "Tap to check exit IP & delay",
+                                    text = stringResource(R.string.dock_tap_to_check),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -213,13 +267,17 @@ fun ConnectionDock(
                             }
                         }
 
-                        if (activePingMs != null && activePingMs != 0L) {
-                            Spacer(Modifier.width(8.dp))
+                        val ping = activePingMs?.takeIf { it > 0L } ?: health.delayMs.takeIf { it > 0L }
+                        if (ping != null) {
                             Text(
-                                text = if (activePingMs > 0L) "$activePingMs ms" else "Timeout",
+                                text = "${ping} ms",
                                 style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (activePingMs > 0L) colorPing else colorPingRed,
+                                fontFamily = FontFamily.Monospace,
+                                color = when {
+                                    ping < 250 -> colorPing
+                                    ping < 600 -> Color(0xFFE0A030)
+                                    else -> colorPingRed
+                                },
                             )
                         }
                     }
@@ -228,17 +286,26 @@ fun ConnectionDock(
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
                         Text(
                             text = "↑ ${Formatters.speed(status.uplink)}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Text(
                             text = "↓ ${Formatters.speed(status.downlink)}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                            style = MaterialTheme.typography.labelSmall,
+                            fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.weight(1f))
+                        Text(
+                            text = stringResource(R.string.dock_tap_to_check),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         )
                     }
                 }

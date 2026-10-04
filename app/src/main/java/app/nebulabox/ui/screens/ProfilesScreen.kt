@@ -44,6 +44,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.nebulabox.R
 import app.nebulabox.BuildConfig
 import app.nebulabox.config.ConfigBuilder
 import app.nebulabox.data.Profile
@@ -55,6 +56,7 @@ import app.nebulabox.ui.components.EmptyServerState
 import app.nebulabox.ui.components.JavidTopBar
 import app.nebulabox.ui.components.ServerProfileCard
 import app.nebulabox.ui.components.SubscriptionGroupBar
+import app.nebulabox.ui.components.SubscriptionQuotaCard
 import app.nebulabox.ui.dialogs.ConfirmActionDialog
 import app.nebulabox.ui.dialogs.ImportConfigDialog
 import app.nebulabox.ui.dialogs.QrCodeDialog
@@ -85,6 +87,7 @@ fun ProfilesScreen(
     val activePingMs by viewModel.activeDelayMs.collectAsStateWithLifecycle()
     val exitIpInfo by viewModel.endpointLocation.collectAsStateWithLifecycle()
     val availableUpdate by viewModel.availableUpdate.collectAsStateWithLifecycle()
+    val connectionHealth by viewModel.connectionHealth.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -175,7 +178,7 @@ fun ProfilesScreen(
         scope.launch {
             val decoded = QrImageDecoder.decode(context, uri)
             if (decoded.isNullOrBlank()) {
-                Toast.makeText(context, "No QR code found in that image", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.qr_not_found_in_image), Toast.LENGTH_SHORT).show()
             } else {
                 viewModel.submitImportText(decoded)
             }
@@ -185,7 +188,7 @@ fun ProfilesScreen(
     val importClipboardAction = {
         val clip = ClipboardHelper.readText(context)
         if (clip.isNullOrBlank()) {
-            Toast.makeText(context, "Clipboard is empty", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, context.getString(R.string.clipboard_empty), Toast.LENGTH_SHORT).show()
         } else {
             viewModel.submitImportText(clip)
         }
@@ -228,7 +231,7 @@ fun ProfilesScreen(
             onExportAll = {
                 viewModel.exportAllShareLinks { text ->
                     if (text.isBlank()) {
-                        Toast.makeText(context, "No shareable profiles", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, context.getString(R.string.no_shareable_profiles), Toast.LENGTH_SHORT).show()
                     } else {
                         ClipboardHelper.copyText(context, "JavidTun Export", text)
                     }
@@ -243,6 +246,7 @@ fun ProfilesScreen(
             isTestingActive = isTestingActive,
             testingProgress = testingProgress,
             exitIpInfo = exitIpInfo,
+            health = connectionHealth,
             onTestCurrentServer = { viewModel.testActiveConnectionDelay() },
             onToggleService = {
                 if (selectedProfile != null) {
@@ -252,6 +256,25 @@ fun ProfilesScreen(
                 }
             },
         )
+
+        val quotaSubscription = remember(subscriptions, selectedSubId, settings.selectedProfileId) {
+            val direct = subscriptions.firstOrNull { it.id == selectedSubId }
+            if (direct != null) {
+                direct
+            } else {
+                val active = profiles.firstOrNull { it.id == settings.selectedProfileId }
+                val activeSubId = active?.subscriptionId.orEmpty()
+                subscriptions.firstOrNull { it.id == activeSubId }
+                    ?: subscriptions.firstOrNull { it.hasQuota || it.expireAtSeconds > 0L }
+            }
+        }
+
+        quotaSubscription?.let { sub ->
+            SubscriptionQuotaCard(
+                subscription = sub,
+                onRefresh = { viewModel.refreshSubscription(sub.id) },
+            )
+        }
 
         SubscriptionGroupBar(
             subscriptions = subscriptions,
@@ -351,7 +374,7 @@ fun ProfilesScreen(
                                 }
                                 val export = selected.joinToString("\n") { ShareLinkParser.toShareUri(it) }
                                 if (export.isBlank()) {
-                                    Toast.makeText(context, "Selected custom profiles cannot be exported as share links", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, context.getString(R.string.custom_profiles_not_exportable), Toast.LENGTH_SHORT).show()
                                 } else {
                                     ClipboardHelper.copyText(context, "JavidTun Export", export)
                                 }
@@ -471,7 +494,7 @@ fun ProfilesScreen(
                 shareTarget = null
                 val uri = ShareLinkParser.toShareUri(profile)
                 if (uri.isBlank()) {
-                    Toast.makeText(context, "Cannot export URI for this profile", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.cannot_export_uri), Toast.LENGTH_SHORT).show()
                 } else {
                     ClipboardHelper.copyText(context, profile.displayName, uri)
                 }
