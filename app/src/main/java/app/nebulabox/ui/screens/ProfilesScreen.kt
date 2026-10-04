@@ -283,8 +283,6 @@ fun ProfilesScreen(
             selectedSubId = selectedSubId,
             currentListCount = filteredProfiles.size,
             onSelectGroup = { viewModel.selectSubscriptionFilter(it) },
-            onPingAll = { viewModel.testAllRealPing() },
-            onSortByPing = { viewModel.sortByTestResults() },
         )
 
         availableUpdate?.let { update ->
