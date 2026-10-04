@@ -7,6 +7,9 @@ plugins {
 
 val coreArchive = file("libs/libv2ray.aar")
 val hasEngine: Boolean = coreArchive.exists()
+val githubRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+val appVersionCode = githubRunNumber ?: 3
+val appVersionName = githubRunNumber?.let { "2.1.0-$it" } ?: "2.1.0"
 
 android {
     namespace = "app.nebulabox"
@@ -16,8 +19,8 @@ android {
         applicationId = "app.nebulabox"
         minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
         resourceConfigurations += listOf("en", "fa")
         ndk {
             abiFilters += listOf("arm64-v8a")
