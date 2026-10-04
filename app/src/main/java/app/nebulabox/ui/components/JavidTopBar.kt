@@ -120,7 +120,7 @@ fun JavidTopBar(
                         )
                         if (searchQuery.isNotEmpty()) {
                             IconButton(onClick = { onSearchQueryChange("") }) {
-                                Icon(Icons.Filled.Clear, contentDescription = "Clear")
+                                Icon(Icons.Filled.Clear, contentDescription = stringResource(R.string.clear))
                             }
                         }
                     }
@@ -148,7 +148,7 @@ fun JavidTopBar(
                     IconButton(onClick = onSearchClose) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_arrow_back_24dp),
-                            contentDescription = "Back",
+                            contentDescription = stringResource(R.string.back),
                         )
                     }
                 }
@@ -168,7 +168,7 @@ fun JavidTopBar(
                     IconButton(onClick = { onSearchToggle(true) }) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_search_24dp),
-                            contentDescription = "Search",
+                            contentDescription = stringResource(R.string.search),
                         )
                     }
                 }
@@ -176,7 +176,7 @@ fun JavidTopBar(
                 IconButton(onClick = onOpenSubscriptions) {
                     Icon(
                         painter = painterResource(id = R.drawable.ic_subscriptions_24dp),
-                        contentDescription = "Subscriptions",
+                        contentDescription = stringResource(R.string.subscriptions),
                     )
                 }
 
@@ -184,7 +184,7 @@ fun JavidTopBar(
                     IconButton(onClick = { showImportMenu = true }) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_add_24dp),
-                            contentDescription = "Add",
+                            contentDescription = stringResource(R.string.add),
                         )
                     }
                     DropdownMenu(
@@ -193,28 +193,28 @@ fun JavidTopBar(
                         shape = RoundedCornerShape(12.dp),
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Import from Clipboard") },
+                            text = { Text(stringResource(R.string.import_from_clipboard)) },
                             onClick = {
                                 showImportMenu = false
                                 onImportClipboard()
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Import URL / Subscription / JSON") },
+                            text = { Text(stringResource(R.string.import_url_subscription_json)) },
                             onClick = {
                                 showImportMenu = false
                                 onImportUrlOrText()
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Scan QR code") },
+                            text = { Text(stringResource(R.string.scan_qr_code)) },
                             onClick = {
                                 showImportMenu = false
                                 onScanQr()
                             },
                         )
                         DropdownMenuItem(
-                            text = { Text("Import QR from image") },
+                            text = { Text(stringResource(R.string.import_qr_from_image)) },
                             onClick = {
                                 showImportMenu = false
                                 onImportQrImage()
@@ -222,35 +222,35 @@ fun JavidTopBar(
                         )
                         AppDivider()
                         DropdownMenuItem(
-                            text = { Text("New VLESS") },
+                            text = { Text(stringResource(R.string.new_vless)) },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.VLESS) },
                         )
                         DropdownMenuItem(
-                            text = { Text("New VMess") },
+                            text = { Text(stringResource(R.string.new_vmess)) },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.VMESS) },
                         )
                         DropdownMenuItem(
-                            text = { Text("New Trojan") },
+                            text = { Text(stringResource(R.string.new_trojan)) },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.TROJAN) },
                         )
                         DropdownMenuItem(
-                            text = { Text("New Shadowsocks") },
+                            text = { Text(stringResource(R.string.new_shadowsocks)) },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.SHADOWSOCKS) },
                         )
                         DropdownMenuItem(
-                            text = { Text("New Hysteria2") },
+                            text = { Text(stringResource(R.string.new_hysteria2)) },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.HYSTERIA2) },
                         )
                         DropdownMenuItem(
-                            text = { Text("New WireGuard") },
+                            text = { Text(stringResource(R.string.new_wireguard)) },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.WIREGUARD) },
                         )
                         DropdownMenuItem(
-                            text = { Text("New SOCKS / HTTP") },
+                            text = { Text(stringResource(R.string.new_socks_http)) },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.SOCKS) },
                         )
                         DropdownMenuItem(
-                            text = { Text("New Custom JSON") },
+                            text = { Text(stringResource(R.string.new_custom_json)) },
                             onClick = { showImportMenu = false; onNewProtocol(Protocol.CUSTOM) },
                         )
                     }
@@ -260,7 +260,7 @@ fun JavidTopBar(
                     IconButton(onClick = { showMoreMenu = true }) {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_more_vert_24dp),
-                            contentDescription = "More",
+                            contentDescription = stringResource(R.string.more),
                         )
                     }
                     DropdownMenu(
@@ -269,37 +269,37 @@ fun JavidTopBar(
                         shape = RoundedCornerShape(12.dp),
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Real ping all servers") },
+                            text = { Text(stringResource(R.string.real_ping_all_servers)) },
                             onClick = { showMoreMenu = false; onPingAllReal() },
                         )
                         DropdownMenuItem(
-                            text = { Text("TCP ping all servers") },
+                            text = { Text(stringResource(R.string.tcp_ping_all_servers)) },
                             onClick = { showMoreMenu = false; onPingAllTcp() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Sort by ping results") },
+                            text = { Text(stringResource(R.string.sort_by_ping_results)) },
                             onClick = { showMoreMenu = false; onSortByTestResults() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Update subscriptions") },
+                            text = { Text(stringResource(R.string.update_subscriptions)) },
                             onClick = { showMoreMenu = false; onUpdateSubscriptions() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Restart tunnel") },
+                            text = { Text(stringResource(R.string.restart_tunnel)) },
                             onClick = { showMoreMenu = false; onRestartService() },
                         )
                         AppDivider()
                         AppDivider()
                         DropdownMenuItem(
-                            text = { Text("Export configs to clipboard") },
+                            text = { Text(stringResource(R.string.export_configs_to_clipboard)) },
                             onClick = { showMoreMenu = false; onExportAll() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Remove duplicate configs") },
+                            text = { Text(stringResource(R.string.remove_duplicate_configs)) },
                             onClick = { showMoreMenu = false; onDeleteDuplicates() },
                         )
                         DropdownMenuItem(
-                            text = { Text("Remove invalid configs") },
+                            text = { Text(stringResource(R.string.remove_invalid_configs)) },
                             onClick = { showMoreMenu = false; onDeleteInvalid() },
                         )
                         DropdownMenuItem(

@@ -29,6 +29,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.nebulabox.R
 
@@ -113,7 +114,7 @@ fun EmptyServerState(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "Paste Config",
+                            text = stringResource(R.string.paste_config),
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1,
                             softWrap = false,
@@ -136,7 +137,7 @@ fun EmptyServerState(
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            text = "Import URL",
+                            text = stringResource(R.string.import_url),
                             style = MaterialTheme.typography.labelLarge,
                             maxLines = 1,
                             softWrap = false,

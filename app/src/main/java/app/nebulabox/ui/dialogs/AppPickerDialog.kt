@@ -80,13 +80,13 @@ fun AppPickerDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(22.dp),
-        title = { Text("Per-App Proxy") },
+        title = { Text(stringResource(R.string.per_app_proxy)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = search,
                     onValueChange = { search = it },
-                    placeholder = { Text("Search apps...") },
+                    placeholder = { Text(stringResource(R.string.search_apps)) },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
@@ -98,7 +98,7 @@ fun AppPickerDialog(
                         .clickable { showSystemApps = !showSystemApps },
                 ) {
                     Checkbox(checked = showSystemApps, onCheckedChange = { showSystemApps = it })
-                    Text("Show system apps", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(R.string.show_system_apps), style = MaterialTheme.typography.bodySmall)
                 }
                 LazyColumn(modifier = Modifier.heightIn(max = 340.dp)) {
                     items(filtered, key = { it.packageName }) { app ->

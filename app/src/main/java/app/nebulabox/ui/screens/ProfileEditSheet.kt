@@ -118,7 +118,7 @@ fun ProfileEditSheet(
             OutlinedTextField(
                 value = profile.customConfig,
                 onValueChange = { profile = profile.copy(customConfig = it) },
-                label = { Text("Custom JSON Config") },
+                label = { Text(stringResource(R.string.custom_json_config)) },
                 modifier = Modifier.fillMaxWidth(),
                 minLines = 8,
                 maxLines = 16,
@@ -154,7 +154,7 @@ fun ProfileEditSheet(
                         singleLine = true,
                     )
                     SimpleDropdown(
-                        label = "Flow",
+                        label = stringResource(R.string.flow),
                         value = profile.flow,
                         options = listOf("", "xtls-rprx-vision", "xtls-rprx-vision-udp443"),
                         onSelect = { profile = profile.copy(flow = it) },
@@ -162,7 +162,7 @@ fun ProfileEditSheet(
                     OutlinedTextField(
                         value = profile.encryption,
                         onValueChange = { profile = profile.copy(encryption = it) },
-                        label = { Text("Encryption (default: none)") },
+                        label = { Text(stringResource(R.string.encryption_default_none)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -187,7 +187,7 @@ fun ProfileEditSheet(
                         singleLine = true,
                     )
                     SimpleDropdown(
-                        label = "VMess Security",
+                        label = stringResource(R.string.vmess_security),
                         value = profile.security.ifBlank { "auto" },
                         options = listOf("auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"),
                         onSelect = { profile = profile.copy(security = it) },
@@ -208,21 +208,21 @@ fun ProfileEditSheet(
                     OutlinedTextField(
                         value = profile.password,
                         onValueChange = { profile = profile.copy(password = it) },
-                        label = { Text("Auth Password") },
+                        label = { Text(stringResource(R.string.auth_password)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
                     OutlinedTextField(
                         value = profile.obfsPassword,
                         onValueChange = { profile = profile.copy(obfsPassword = it) },
-                        label = { Text("Salamander Obfs Password (optional)") },
+                        label = { Text(stringResource(R.string.salamander_obfs_password_optional)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
                     OutlinedTextField(
                         value = profile.portHopping,
                         onValueChange = { profile = profile.copy(portHopping = it) },
-                        label = { Text("Port Hopping (e.g. 20000-50000)") },
+                        label = { Text(stringResource(R.string.port_hopping_e_g_20000_50000)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -291,7 +291,7 @@ fun ProfileEditSheet(
                             val list = it.split(",").map { s -> s.trim() }.filter { s -> s.isNotEmpty() }
                             profile = profile.copy(localAddresses = list)
                         },
-                        label = { Text("Local Address (e.g. 172.16.0.2/32)") },
+                        label = { Text(stringResource(R.string.local_address_e_g_172_16_0_2_32)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -323,7 +323,7 @@ fun ProfileEditSheet(
             ) {
                 if (profile.protocol != Protocol.HYSTERIA2) {
                     SimpleDropdown(
-                        label = "Network / Transport",
+                        label = stringResource(R.string.network_transport),
                         value = profile.transport.type.ifBlank { "tcp" },
                         options = listOf("tcp", "ws", "httpupgrade", "xhttp", "grpc", "kcp"),
                         onSelect = {
@@ -335,7 +335,7 @@ fun ProfileEditSheet(
                         onValueChange = {
                             profile = profile.copy(transport = profile.transport.copy(host = it))
                         },
-                        label = { Text("Request Host / Authority") },
+                        label = { Text(stringResource(R.string.request_host_authority)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -355,7 +355,7 @@ fun ProfileEditSheet(
                 }
 
                 SimpleDropdown(
-                    label = "Stream Security",
+                    label = stringResource(R.string.stream_security),
                     value = when {
                         profile.tls.reality -> "reality"
                         profile.tls.enabled -> "tls"
@@ -383,7 +383,7 @@ fun ProfileEditSheet(
                         singleLine = true,
                     )
                     SimpleDropdown(
-                        label = "uTLS Fingerprint",
+                        label = stringResource(R.string.utls_fingerprint),
                         value = profile.tls.utlsFingerprint,
                         options = listOf("", "chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random", "randomized"),
                         onSelect = {
@@ -397,14 +397,14 @@ fun ProfileEditSheet(
                             val list = it.split(",").map { s -> s.trim() }.filter { s -> s.isNotEmpty() }
                             profile = profile.copy(tls = profile.tls.copy(alpn = list))
                         },
-                        label = { Text("ALPN (e.g. h2,http/1.1 or h3)") },
+                        label = { Text(stringResource(R.string.alpn_e_g_h2_http_1_1_or_h3)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
                     OutlinedTextField(
                         value = profile.finalMask,
                         onValueChange = { profile = profile.copy(finalMask = it) },
-                        label = { Text("FinalMask JSON (fm)") },
+                        label = { Text(stringResource(R.string.finalmask_json_fm)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -413,7 +413,7 @@ fun ProfileEditSheet(
                         onValueChange = {
                             profile = profile.copy(tls = profile.tls.copy(echConfigList = it))
                         },
-                        label = { Text("ECH Config List (ech)") },
+                        label = { Text(stringResource(R.string.ech_config_list_ech)) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -424,7 +424,7 @@ fun ProfileEditSheet(
                             onValueChange = {
                                 profile = profile.copy(tls = profile.tls.copy(realityPublicKey = it))
                             },
-                            label = { Text("REALITY Public Key (pbk)") },
+                            label = { Text(stringResource(R.string.reality_public_key_pbk)) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                         )
@@ -433,7 +433,7 @@ fun ProfileEditSheet(
                             onValueChange = {
                                 profile = profile.copy(tls = profile.tls.copy(realityShortId = it))
                             },
-                            label = { Text("REALITY Short ID (sid)") },
+                            label = { Text(stringResource(R.string.reality_short_id_sid)) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                         )
@@ -442,7 +442,7 @@ fun ProfileEditSheet(
                             onValueChange = {
                                 profile = profile.copy(tls = profile.tls.copy(realitySpiderX = it))
                             },
-                            label = { Text("REALITY SpiderX (spx)") },
+                            label = { Text(stringResource(R.string.reality_spiderx_spx)) },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
                         )

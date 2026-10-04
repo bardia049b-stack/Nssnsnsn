@@ -57,7 +57,9 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.nebulabox.R
 import app.nebulabox.ui.NebulaViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -147,7 +149,7 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "Use Per-App Proxy",
+                        text = stringResource(R.string.use_per_app_proxy),
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = if (settings.perAppEnabled) {
@@ -183,7 +185,7 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
         }
 
         Text(
-            text = "Proxy mode",
+            text = stringResource(R.string.proxy_mode),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 8.dp),
@@ -203,7 +205,7 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                     shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp),
                 ) {
-                    Text("Bypass selected", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.bypass_selected), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 OutlinedButton(
@@ -212,7 +214,7 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                     shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp),
                 ) {
-                    Text("Bypass selected", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.bypass_selected), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             if (!bypassSelected) {
@@ -222,7 +224,7 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                     shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp),
                 ) {
-                    Text("Only proxy selected", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.only_proxy_selected), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 OutlinedButton(
@@ -231,7 +233,7 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                     shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp),
                 ) {
-                    Text("Only proxy selected", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(stringResource(R.string.only_proxy_selected), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -245,12 +247,12 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                 .padding(top = 12.dp),
             singleLine = true,
             shape = RoundedCornerShape(16.dp),
-            placeholder = { Text("Search apps…") },
+            placeholder = { Text(stringResource(R.string.search_apps_924)) },
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
             trailingIcon = {
                 if (searchQuery.isNotEmpty()) {
                     IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Filled.Clear, contentDescription = "Clear search")
+                        Icon(Icons.Filled.Clear, contentDescription = stringResource(R.string.clear_search))
                     }
                 }
             },
@@ -265,14 +267,14 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
             FilterChip(
                 selected = showSystemApps,
                 onClick = { showSystemApps = !showSystemApps },
-                label = { Text("System apps") },
+                label = { Text(stringResource(R.string.system_apps)) },
             )
             Spacer(Modifier.weight(1f))
             if (settings.perAppPackages.isNotEmpty()) {
                 TextButton(
                     onClick = { viewModel.updateSettings { it.copy(perAppPackages = emptySet()) } },
                 ) {
-                    Text("Clear selection")
+                    Text(stringResource(R.string.clear_selection))
                 }
             }
             Text(
@@ -298,7 +300,7 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = "No matching apps",
+                    text = stringResource(R.string.no_matching_apps),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import app.nebulabox.R
 import app.nebulabox.data.SubscriptionItem
@@ -56,10 +57,10 @@ fun SubscriptionsSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Subscription Groups")
+                Text(stringResource(R.string.subscription_groups))
                 if (subscriptions.isNotEmpty()) {
                     IconButton(onClick = onUpdateAll, enabled = !isUpdating) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "Update all subscriptions")
+                        Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.update_all_subscriptions))
                     }
                 }
             }
@@ -95,12 +96,12 @@ fun SubscriptionsSheet(
                                         url = subscription.url
                                     },
                                 ) {
-                                    Icon(Icons.Outlined.Edit, contentDescription = "Edit subscription")
+                                    Icon(Icons.Outlined.Edit, contentDescription = stringResource(R.string.edit_subscription))
                                 }
                                 IconButton(onClick = { pendingDelete = subscription }) {
                                     Icon(
                                         painter = painterResource(id = R.drawable.ic_delete_24dp),
-                                        contentDescription = "Delete subscription",
+                                        contentDescription = stringResource(R.string.delete_subscription),
                                         tint = MaterialTheme.colorScheme.error,
                                     )
                                 }
@@ -117,7 +118,7 @@ fun SubscriptionsSheet(
                 OutlinedTextField(
                     value = remarks,
                     onValueChange = { remarks = it },
-                    label = { Text("Group Name") },
+                    label = { Text(stringResource(R.string.group_name)) },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
@@ -170,7 +171,7 @@ fun SubscriptionsSheet(
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             shape = RoundedCornerShape(22.dp),
-            title = { Text("Delete subscription?") },
+            title = { Text(stringResource(R.string.delete_subscription_705)) },
             text = {
                 Text("Delete ‘${subscription.remarks}’ and its imported servers? This cannot be undone.")
             },
@@ -186,12 +187,12 @@ fun SubscriptionsSheet(
                         }
                     },
                 ) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) {
-                    Text("Cancel")
+                    Text(stringResource(R.string.cancel))
                 }
             },
         )

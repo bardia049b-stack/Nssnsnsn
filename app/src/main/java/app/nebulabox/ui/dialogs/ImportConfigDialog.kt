@@ -36,13 +36,13 @@ fun ImportConfigDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(22.dp),
-        title = { Text("Import Config / Subscription") },
+        title = { Text(stringResource(R.string.import_config_subscription)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = text,
                     onValueChange = { text = it },
-                    label = { Text("Share links, Subscription URL, or JSON") },
+                    label = { Text(stringResource(R.string.share_links_subscription_url_or_json)) },
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
                     minLines = 3,
@@ -56,13 +56,13 @@ fun ImportConfigDialog(
                             .clickable { saveAsSub = !saveAsSub },
                     ) {
                         Checkbox(checked = saveAsSub, onCheckedChange = { saveAsSub = it })
-                        Text("Save as Subscription Group", style = MaterialTheme.typography.bodyMedium)
+                        Text(stringResource(R.string.save_as_subscription_group), style = MaterialTheme.typography.bodyMedium)
                     }
                     if (saveAsSub) {
                         OutlinedTextField(
                             value = subRemarks,
                             onValueChange = { subRemarks = it },
-                            label = { Text("Group Name (e.g. Main Sub)") },
+                            label = { Text(stringResource(R.string.group_name_e_g_main_sub)) },
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             modifier = Modifier.fillMaxWidth(),

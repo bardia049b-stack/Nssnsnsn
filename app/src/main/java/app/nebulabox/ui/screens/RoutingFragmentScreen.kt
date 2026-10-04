@@ -32,40 +32,43 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.annotation.StringRes
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.nebulabox.R
 import app.nebulabox.ui.NebulaViewModel
 
 private data class RouteModeOption(
     val key: String,
-    val title: String,
-    val subtitle: String,
+    @StringRes val title: Int,
+    @StringRes val subtitle: Int,
 )
 
 private val ROUTE_MODES = listOf(
     RouteModeOption(
         key = "global",
-        title = "Proxy All Traffic",
-        subtitle = "Route all traffic through the active proxy server",
+        title = R.string.proxy_all_traffic,
+        subtitle = R.string.route_all_traffic_through_the_active_proxy_serve,
     ),
     RouteModeOption(
         key = "bypass_lan",
-        title = "Bypass Local Network (LAN)",
-        subtitle = "Connect private local IPs directly and proxy everything else",
+        title = R.string.bypass_local_network_lan,
+        subtitle = R.string.connect_private_local_ips_directly_and_proxy_eve,
     ),
     RouteModeOption(
         key = "bypass_iran",
-        title = "Bypass Iran (.ir & domestic IPs)",
-        subtitle = "Connect Iranian domains and domestic IPs directly without VPN",
+        title = R.string.bypass_iran_ir_domestic_ips,
+        subtitle = R.string.connect_iranian_domains_and_domestic_ips_directl,
     ),
     RouteModeOption(
         key = "bypass_china",
-        title = "Bypass Mainland & LAN",
-        subtitle = "Bypass private and domestic mainland ranges",
+        title = R.string.bypass_mainland_lan,
+        subtitle = R.string.bypass_private_and_domestic_mainland_ranges,
     ),
     RouteModeOption(
         key = "direct",
-        title = "Direct Only",
-        subtitle = "Send all traffic directly without proxy",
+        title = R.string.direct_only,
+        subtitle = R.string.send_all_traffic_directly_without_proxy,
     ),
 )
 
@@ -82,7 +85,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(
-            text = "TLS Fragment",
+            text = stringResource(R.string.tls_fragment),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,
@@ -106,13 +109,13 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "Enable TLS Fragment",
+                            text = stringResource(R.string.enable_tls_fragment),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                         )
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            text = "Splits TLS ClientHello packets to bypass DPI inspection",
+                            text = stringResource(R.string.splits_tls_clienthello_packets_to_bypass_dpi_ins),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -134,7 +137,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                     Spacer(Modifier.height(12.dp))
 
                     Text(
-                        text = "Packets Mode",
+                        text = stringResource(R.string.packets_mode),
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -165,7 +168,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                             onValueChange = { v ->
                                 viewModel.updateSettings { it.copy(fragmentLength = v) }
                             },
-                            label = { Text("Length (bytes)") },
+                            label = { Text(stringResource(R.string.length_bytes)) },
                             placeholder = { Text("50-100") },
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
@@ -176,7 +179,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                             onValueChange = { v ->
                                 viewModel.updateSettings { it.copy(fragmentInterval = v) }
                             },
-                            label = { Text("Delay (ms)") },
+                            label = { Text(stringResource(R.string.delay_ms)) },
                             placeholder = { Text("10-20") },
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
@@ -199,7 +202,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                                     )
                                 }
                             },
-                            label = { Text("Preset: Fast (10-20)") },
+                            label = { Text(stringResource(R.string.preset_fast_10_20)) },
                         )
                         FilterChip(
                             selected = s.fragmentLength == "50-100" && s.fragmentInterval == "10-20",
@@ -212,7 +215,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                                     )
                                 }
                             },
-                            label = { Text("Preset: Balanced (50-100)") },
+                            label = { Text(stringResource(R.string.preset_balanced_50_100)) },
                         )
                         FilterChip(
                             selected = s.fragmentLength == "100-200" && s.fragmentInterval == "10-20",
@@ -225,7 +228,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                                     )
                                 }
                             },
-                            label = { Text("Preset: Standard (100-200)") },
+                            label = { Text(stringResource(R.string.preset_standard_100_200)) },
                         )
                     }
                 }
@@ -233,7 +236,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
         }
 
         Text(
-            text = "Routing Mode",
+            text = stringResource(R.string.routing_mode),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,
@@ -265,14 +268,14 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                         },
                         headlineContent = {
                             Text(
-                                text = option.title,
+                                text = stringResource(option.title),
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                             )
                         },
                         supportingContent = {
                             Text(
-                                text = option.subtitle,
+                                text = stringResource(option.subtitle),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -290,7 +293,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
         }
 
         Text(
-            text = "Domain Strategy & Sniffing",
+            text = stringResource(R.string.domain_strategy_sniffing),
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.SemiBold,
@@ -305,7 +308,7 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
             Column(modifier = Modifier.padding(vertical = 8.dp)) {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                     Text(
-                        text = "Domain Resolution Strategy",
+                        text = stringResource(R.string.domain_resolution_strategy),
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Medium,
                     )
@@ -334,8 +337,8 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                         viewModel.updateSettings { it.copy(sniffing = !s.sniffing) }
                     },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    headlineContent = { Text("Traffic Sniffing") },
-                    supportingContent = { Text("Detect HTTP and TLS domain names from packets") },
+                    headlineContent = { Text(stringResource(R.string.traffic_sniffing)) },
+                    supportingContent = { Text(stringResource(R.string.detect_http_and_tls_domain_names_from_packets)) },
                     trailingContent = {
                         Switch(
                             checked = s.sniffing,
@@ -357,8 +360,8 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                         viewModel.updateSettings { it.copy(blockAds = !s.blockAds) }
                     },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    headlineContent = { Text("Block Ads & Trackers") },
-                    supportingContent = { Text("Reject known ad-serving domains in routing") },
+                    headlineContent = { Text(stringResource(R.string.block_ads_trackers)) },
+                    supportingContent = { Text(stringResource(R.string.reject_known_ad_serving_domains_in_routing)) },
                     trailingContent = {
                         Switch(
                             checked = s.blockAds,
@@ -380,8 +383,8 @@ fun RoutingFragmentScreen(viewModel: NebulaViewModel) {
                         viewModel.updateSettings { it.copy(tcpMux = !s.tcpMux) }
                     },
                     colors = ListItemDefaults.colors(containerColor = Color.Transparent),
-                    headlineContent = { Text("TCP Multiplexing (Mux)") },
-                    supportingContent = { Text("Multiplex multiple TCP streams over one connection") },
+                    headlineContent = { Text(stringResource(R.string.tcp_multiplexing_mux)) },
+                    supportingContent = { Text(stringResource(R.string.multiplex_multiple_tcp_streams_over_one_connecti)) },
                     trailingContent = {
                         Switch(
                             checked = s.tcpMux,

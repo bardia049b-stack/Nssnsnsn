@@ -122,7 +122,7 @@ fun SubscriptionGroupBar(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = "Ping",
+                            text = stringResource(R.string.ping),
                             style = MaterialTheme.typography.labelMedium,
                             maxLines = 1,
                             softWrap = false,
@@ -142,7 +142,7 @@ fun SubscriptionGroupBar(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = "Sort",
+                            text = stringResource(R.string.sort),
                             style = MaterialTheme.typography.labelMedium,
                             maxLines = 1,
                             softWrap = false,

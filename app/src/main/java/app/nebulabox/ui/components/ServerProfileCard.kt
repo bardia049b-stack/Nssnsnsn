@@ -36,7 +36,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.nebulabox.R
 import app.nebulabox.data.Profile
 import app.nebulabox.ui.colorPing
 import app.nebulabox.ui.colorPingRed
@@ -163,7 +165,7 @@ fun ServerProfileCard(
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.MoreVert,
-                        contentDescription = "Options",
+                        contentDescription = stringResource(R.string.options),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp),
                     )
@@ -174,28 +176,28 @@ fun ServerProfileCard(
                     shape = RoundedCornerShape(12.dp),
                 ) {
                     DropdownMenuItem(
-                        text = { Text("Test Latency") },
+                        text = { Text(stringResource(R.string.test_latency)) },
                         onClick = {
                             showMenu = false
                             onPingSingle()
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text("Edit") },
+                        text = { Text(stringResource(R.string.edit)) },
                         onClick = {
                             showMenu = false
                             onEdit()
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text("Share / QR Code") },
+                        text = { Text(stringResource(R.string.share_qr_code)) },
                         onClick = {
                             showMenu = false
                             onShare()
                         },
                     )
                     DropdownMenuItem(
-                        text = { Text("Duplicate") },
+                        text = { Text(stringResource(R.string.duplicate)) },
                         onClick = {
                             showMenu = false
                             onDuplicate()
@@ -204,7 +206,7 @@ fun ServerProfileCard(
                     DropdownMenuItem(
                         text = {
                             Text(
-                                text = "Delete",
+                                text = stringResource(R.string.delete),
                                 color = MaterialTheme.colorScheme.error,
                             )
                         },

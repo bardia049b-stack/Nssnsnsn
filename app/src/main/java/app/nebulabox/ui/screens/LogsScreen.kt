@@ -96,7 +96,7 @@ fun LogsScreen(viewModel: NebulaViewModel) {
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Diagnostics",
+                    text = stringResource(R.string.diagnostics),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
@@ -120,7 +120,7 @@ fun LogsScreen(viewModel: NebulaViewModel) {
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.ContentCopy,
-                        contentDescription = "Copy",
+                        contentDescription = stringResource(R.string.copy),
                     )
                 }
                 IconButton(
@@ -163,7 +163,7 @@ fun LogsScreen(viewModel: NebulaViewModel) {
                 onClick = { selectedTab = 1 },
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Crashes", maxLines = 1)
+                        Text(stringResource(R.string.crashes), maxLines = 1)
                         if (crashes.isNotEmpty()) {
                             Spacer(Modifier.width(6.dp))
                             Badge(containerColor = MaterialTheme.colorScheme.error) {
@@ -176,12 +176,12 @@ fun LogsScreen(viewModel: NebulaViewModel) {
             Tab(
                 selected = selectedTab == 2,
                 onClick = { selectedTab = 2 },
-                text = { Text("Config", maxLines = 1) },
+                text = { Text(stringResource(R.string.config), maxLines = 1) },
             )
             Tab(
                 selected = selectedTab == 3,
                 onClick = { selectedTab = 3 },
-                text = { Text("Logcat", maxLines = 1) },
+                text = { Text(stringResource(R.string.logcat), maxLines = 1) },
             )
         }
 
@@ -265,7 +265,7 @@ private fun LiveLogsTab(
             ) {
                 Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Copy All", maxLines = 1, softWrap = false)
+                Text(stringResource(R.string.copy_all), maxLines = 1, softWrap = false)
             }
         }
 
@@ -335,7 +335,7 @@ private fun CrashesTab(
             ) {
                 Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Scan Native", maxLines = 1, softWrap = false)
+                Text(stringResource(R.string.scan_native), maxLines = 1, softWrap = false)
             }
             if (crashes.isNotEmpty()) {
                 OutlinedButton(
@@ -345,7 +345,7 @@ private fun CrashesTab(
                 ) {
                     Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Copy All", maxLines = 1, softWrap = false)
+                    Text(stringResource(R.string.copy_all), maxLines = 1, softWrap = false)
                 }
                 OutlinedButton(
                     onClick = onClear,
@@ -354,7 +354,7 @@ private fun CrashesTab(
                 ) {
                     Icon(Icons.Outlined.DeleteSweep, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
-                    Text("Clear", maxLines = 1, softWrap = false)
+                    Text(stringResource(R.string.clear), maxLines = 1, softWrap = false)
                 }
             }
         }
@@ -370,7 +370,7 @@ private fun CrashesTab(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "No crash reports recorded.",
+                        text = stringResource(R.string.no_crash_reports_recorded),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -423,7 +423,7 @@ private fun CrashesTab(
                                     )
                                 }
                                 IconButton(onClick = { onCopy(crash.details) }) {
-                                    Icon(Icons.Outlined.ContentCopy, contentDescription = "Copy crash")
+                                    Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.copy_crash))
                                 }
                             }
                             Spacer(Modifier.height(6.dp))
@@ -475,7 +475,7 @@ private fun ConfigTab(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Active Core JSON Configuration",
+                text = stringResource(R.string.active_core_json_configuration),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -490,14 +490,14 @@ private fun ConfigTab(
             ) {
                 Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Copy JSON", maxLines = 1, softWrap = false)
+                Text(stringResource(R.string.copy_json), maxLines = 1, softWrap = false)
             }
         }
 
         if (configJson.isBlank()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "Connect to a server profile to generate and inspect the active JSON configuration.",
+                    text = stringResource(R.string.connect_to_a_server_profile_to_generate_and_insp),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(24.dp),
@@ -564,7 +564,7 @@ private fun SystemLogcatTab(
             ) {
                 Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Refresh", maxLines = 1, softWrap = false)
+                Text(stringResource(R.string.refresh), maxLines = 1, softWrap = false)
             }
             OutlinedButton(
                 onClick = { onCopy(logcatText) },
@@ -573,7 +573,7 @@ private fun SystemLogcatTab(
             ) {
                 Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(6.dp))
-                Text("Copy Logcat", maxLines = 1, softWrap = false)
+                Text(stringResource(R.string.copy_logcat), maxLines = 1, softWrap = false)
             }
         }
 

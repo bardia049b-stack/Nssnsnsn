@@ -17,7 +17,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.nebulabox.R
 import app.nebulabox.data.Profile
 import app.nebulabox.util.QrCodeGenerator
 
@@ -50,20 +52,20 @@ fun QrCodeDialog(
                     ) {
                         Image(
                             bitmap = qrBitmap.asImageBitmap(),
-                            contentDescription = "QR Code",
+                            contentDescription = stringResource(R.string.qr_code),
                             modifier = Modifier
                                 .size(240.dp)
                                 .padding(12.dp),
                         )
                     }
                 } else {
-                    Text("Cannot generate QR code for this profile.")
+                    Text(stringResource(R.string.cannot_generate_qr_code_for_this_profile))
                 }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close")
+                Text(stringResource(R.string.close))
             }
         },
     )

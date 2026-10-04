@@ -112,10 +112,10 @@ fun RootScreen(
                     icon = {
                         Icon(
                             imageVector = Icons.Outlined.Dns,
-                            contentDescription = "Servers",
+                            contentDescription = stringResource(R.string.servers),
                         )
                     },
-                    label = { Text("Servers", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(stringResource(R.string.servers), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
 
                 NavigationBarItem(
@@ -124,10 +124,10 @@ fun RootScreen(
                     icon = {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_routing_24dp),
-                            contentDescription = "Routing",
+                            contentDescription = stringResource(R.string.routing),
                         )
                     },
-                    label = { Text("Routing", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(stringResource(R.string.routing), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
 
                 NavigationBarItem(
@@ -136,10 +136,10 @@ fun RootScreen(
                     icon = {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_per_apps_24dp),
-                            contentDescription = "Per-App",
+                            contentDescription = stringResource(R.string.per_app),
                         )
                     },
-                    label = { Text("Per-App", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(stringResource(R.string.per_app), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
 
                 NavigationBarItem(
@@ -157,11 +157,11 @@ fun RootScreen(
                         ) {
                             Icon(
                                 painter = painterResource(id = R.drawable.ic_logcat_24dp),
-                                contentDescription = "Logs",
+                                contentDescription = stringResource(R.string.logs),
                             )
                         }
                     },
-                    label = { Text("Logs", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(stringResource(R.string.logs), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
 
                 NavigationBarItem(
@@ -170,10 +170,10 @@ fun RootScreen(
                     icon = {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_settings_24dp),
-                            contentDescription = "Settings",
+                            contentDescription = stringResource(R.string.settings),
                         )
                     },
-                    label = { Text("Settings", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(stringResource(R.string.settings), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
             }
         },
@@ -208,19 +208,19 @@ fun RootScreen(
                 }
 
                 composable(Route.ROUTING) {
-                    SubScreenScaffold(title = "Routing & Fragment") {
+                    SubScreenScaffold(title = stringResource(R.string.routing_fragment)) {
                         RoutingFragmentScreen(viewModel)
                     }
                 }
 
                 composable(Route.PER_APP) {
-                    SubScreenScaffold(title = "Per-App Proxy") {
+                    SubScreenScaffold(title = stringResource(R.string.per_app_proxy)) {
                         PerAppProxyScreen(viewModel)
                     }
                 }
 
                 composable(Route.LOGS) {
-                    SubScreenScaffold(title = "Logs & Diagnostics") {
+                    SubScreenScaffold(title = stringResource(R.string.logs_diagnostics)) {
                         LogsScreen(viewModel)
                     }
                 }

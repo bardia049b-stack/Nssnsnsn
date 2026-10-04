@@ -113,7 +113,7 @@ fun QrScanDialog(
                         )
                     }
                     Text(
-                        text = "Point the camera at a JavidTun share QR code.",
+                        text = stringResource(R.string.point_the_camera_at_a_javidtun_share_qr_code),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -124,7 +124,7 @@ fun QrScanDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     TextButton(onClick = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) }) {
-                        Text("Allow camera")
+                        Text(stringResource(R.string.allow_camera))
                     }
                 }
                 if (cameraPermissionGranted && scanMessage != null) {
@@ -138,12 +138,12 @@ fun QrScanDialog(
         },
         confirmButton = {
             TextButton(onClick = { galleryLauncher.launch("image/*") }) {
-                Text("Choose from gallery")
+                Text(stringResource(R.string.choose_from_gallery))
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(stringResource(R.string.cancel))
             }
         },
     )

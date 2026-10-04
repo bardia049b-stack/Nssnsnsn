@@ -25,7 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import app.nebulabox.R
 import app.nebulabox.data.Profile
 import app.nebulabox.data.Protocol
 
@@ -62,28 +64,28 @@ fun ShareProfileDialog(
                 if (profile.protocol != Protocol.CUSTOM) {
                     ShareActionRow(
                         icon = Icons.Outlined.QrCode,
-                        title = "Export QR code",
-                        subtitle = "Show a scannable code for this server",
+                        title = stringResource(R.string.export_qr_code),
+                        subtitle = stringResource(R.string.show_a_scannable_code_for_this_server),
                         onClick = onShowQrCode,
                     )
                     ShareActionRow(
                         icon = Icons.Outlined.Link,
-                        title = "Copy share link",
-                        subtitle = "URI format that other clients can import",
+                        title = stringResource(R.string.copy_share_link),
+                        subtitle = stringResource(R.string.uri_format_that_other_clients_can_import),
                         onClick = onCopyUri,
                     )
                 }
                 ShareActionRow(
                     icon = Icons.Outlined.Code,
-                    title = "Copy JSON configuration",
-                    subtitle = "Full outbound object for this server",
+                    title = stringResource(R.string.copy_json_configuration),
+                    subtitle = stringResource(R.string.full_outbound_object_for_this_server),
                     onClick = onCopyFullConfig,
                 )
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Close")
+                Text(stringResource(R.string.close))
             }
         },
     )

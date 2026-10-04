@@ -3,6 +3,7 @@ package app.nebulabox.automation
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import app.nebulabox.R
 import app.nebulabox.Application
 import app.nebulabox.BuildConfig
 import app.nebulabox.data.SettingsStore
@@ -28,8 +29,8 @@ class ReleaseCheckWorker(
                 AutomationNotifications.show(
                     context = applicationContext,
                     notificationId = Application.NOTIFICATION_RELEASE_UPDATE,
-                    title = "JavidTun ${release.tag} is available",
-                    message = "You are on ${BuildConfig.VERSION_NAME}. Tap to open the release page.",
+                    title = applicationContext.getString(R.string.release_available_title, release.tag),
+                    message = applicationContext.getString(R.string.release_available_body, BuildConfig.VERSION_NAME),
                     openUrl = release.releaseUrl,
                 )
                 preferences.edit().putString(KEY_LAST_NOTIFIED_TAG, release.tag).apply()
@@ -38,8 +39,12 @@ class ReleaseCheckWorker(
             AutomationNotifications.show(
                 context = applicationContext,
                 notificationId = Application.NOTIFICATION_RELEASE_UPDATE,
-                title = "JavidTun is up to date",
-                message = "Installed: ${BuildConfig.VERSION_NAME} · Latest: ${release.tag}",
+                title = applicationContext.getString(R.string.release_up_to_date),
+                message = applicationContext.getString(
+                    R.string.release_up_to_date_body,
+                    BuildConfig.VERSION_NAME,
+                    release.tag,
+                ),
                 openUrl = release.releaseUrl,
             )
         }

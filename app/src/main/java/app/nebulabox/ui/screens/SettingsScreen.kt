@@ -52,43 +52,43 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
             .padding(vertical = 8.dp),
     ) {
         SettingsSectionCard(
-            title = "Tunnel & VPN",
+            title = stringResource(R.string.tunnel_vpn),
             expanded = vpnExpanded,
             onExpandedChange = { vpnExpanded = it },
         ) {
             SettingsSwitchRow(
-                title = "High-performance TUN relay",
+                title = stringResource(R.string.high_performance_tun_relay),
                 summary = if (s.useHevTun) "Enabled (hev-socks5-tunnel + local SOCKS)" else "Disabled (Direct Core TUN)",
                 checked = s.useHevTun,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(useHevTun = v) } },
             )
             SettingsSwitchRow(
-                title = "Per-app proxy",
+                title = stringResource(R.string.per_app_proxy_386),
                 summary = if (s.perAppEnabled) "${s.perAppPackages.size} apps selected (${s.perAppMode})" else "Proxy all installed apps",
                 checked = s.perAppEnabled,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(perAppEnabled = v) } },
             )
             if (s.perAppEnabled) {
                 SettingsListRow(
-                    title = "Per-app mode",
+                    title = stringResource(R.string.per_app_mode),
                     options = listOf("exclude" to "Bypass selected apps", "include" to "Only proxy selected apps"),
                     selectedValue = s.perAppMode,
                     onSelected = { v -> viewModel.updateSettings { it.copy(perAppMode = v) } },
                 )
                 SettingsMenuRow(
-                    title = "Select apps",
+                    title = stringResource(R.string.select_apps),
                     subtitle = "${s.perAppPackages.size} apps configured",
                     onClick = { showAppPicker = true },
                 )
             }
             SettingsSwitchRow(
-                title = "Bypass LAN",
-                summary = "Route private local network addresses directly",
+                title = stringResource(R.string.bypass_lan),
+                summary = stringResource(R.string.route_private_local_network_addresses_directly),
                 checked = s.bypassLan,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(bypassLan = v) } },
             )
             SettingsEditRow(
-                title = "VPN MTU",
+                title = stringResource(R.string.vpn_mtu),
                 value = s.mtu.toString(),
                 onValueChanged = { text ->
                     text.toIntOrNull()?.let { mtu ->
@@ -97,7 +97,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 },
             )
             SettingsEditRow(
-                title = "Local SOCKS5 port",
+                title = stringResource(R.string.local_socks5_port),
                 value = s.socksPort.toString(),
                 onValueChanged = { text ->
                     text.toIntOrNull()?.let { port ->
@@ -106,42 +106,42 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 },
             )
             SettingsSwitchRow(
-                title = "Enable IPv6",
-                summary = "Enable IPv6 routing on tunnel interface",
+                title = stringResource(R.string.enable_ipv6),
+                summary = stringResource(R.string.enable_ipv6_routing_on_tunnel_interface),
                 checked = s.ipv6,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(ipv6 = v) } },
             )
             SettingsSwitchRow(
-                title = "Allow LAN connections",
-                summary = "Bind local proxy port on 0.0.0.0",
+                title = stringResource(R.string.allow_lan_connections),
+                summary = stringResource(R.string.bind_local_proxy_port_on_0_0_0_0),
                 checked = s.allowLan,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(allowLan = v) } },
             )
             SettingsSwitchRow(
-                title = "Auto-connect after reboot",
-                summary = "Reconnect to the selected server when Android finishes starting",
+                title = stringResource(R.string.auto_connect_after_reboot),
+                summary = stringResource(R.string.reconnect_to_the_selected_server_when_android_fi),
                 checked = s.autoConnect,
                 onCheckedChange = { enabled ->
                     viewModel.updateSettings { it.copy(autoConnect = enabled) }
                 },
             )
             SettingsSwitchRow(
-                title = "Live speed in notification",
-                summary = "Show upload and download speed in status bar",
+                title = stringResource(R.string.live_speed_in_notification),
+                summary = stringResource(R.string.show_upload_and_download_speed_in_status_bar),
                 checked = s.showSpeedInNotification,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(showSpeedInNotification = v) } },
             )
             SettingsSwitchRow(
-                title = "Reconnect after network changes",
-                summary = "Restart the selected tunnel after Wi-Fi or mobile network handoff",
+                title = stringResource(R.string.reconnect_after_network_changes),
+                summary = stringResource(R.string.restart_the_selected_tunnel_after_wi_fi_or_mobil),
                 checked = s.reconnectOnNetworkChange,
                 onCheckedChange = { enabled ->
                     viewModel.updateSettings { it.copy(reconnectOnNetworkChange = enabled) }
                 },
             )
             SettingsMenuRow(
-                title = "Configure Android kill switch",
-                subtitle = "In system VPN settings, enable Always-on VPN and Block connections without VPN",
+                title = stringResource(R.string.configure_android_kill_switch),
+                subtitle = stringResource(R.string.in_system_vpn_settings_enable_always_on_vpn_and_),
                 onClick = {
                     runCatching { context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }
                 },
@@ -149,12 +149,12 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
         }
 
         SettingsSectionCard(
-            title = "Routing & Sniffing",
+            title = stringResource(R.string.routing_sniffing),
             expanded = routingExpanded,
             onExpandedChange = { routingExpanded = it },
         ) {
             SettingsListRow(
-                title = "Routing preset",
+                title = stringResource(R.string.routing_preset),
                 options = listOf(
                     "global" to "Global (Proxy all except LAN)",
                     "white_iran" to "Bypass LAN & Iran",
@@ -165,7 +165,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 onSelected = { v -> viewModel.updateSettings { it.copy(routeMode = v) } },
             )
             SettingsListRow(
-                title = "Domain strategy",
+                title = stringResource(R.string.domain_strategy),
                 options = listOf(
                     "AsIs" to "AsIs (Default)",
                     "IPIfNonMatch" to "IPIfNonMatch",
@@ -175,7 +175,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 onSelected = { v -> viewModel.updateSettings { it.copy(domainStrategy = v) } },
             )
             SettingsListRow(
-                title = "Server domain resolve method",
+                title = stringResource(R.string.server_domain_resolve_method),
                 options = listOf(
                     "happy_eyeballs" to "Happy Eyeballs (Pre-resolve + UseIP)",
                     "asis" to "AsIs (Do not pre-resolve)",
@@ -184,78 +184,78 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 onSelected = { v -> viewModel.updateSettings { it.copy(outboundDomainResolve = v) } },
             )
             SettingsSwitchRow(
-                title = "Traffic sniffing",
-                summary = "Override destination from TLS SNI / HTTP Host",
+                title = stringResource(R.string.traffic_sniffing_333),
+                summary = stringResource(R.string.override_destination_from_tls_sni_http_host),
                 checked = s.sniffing,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(sniffing = v) } },
             )
             SettingsSwitchRow(
-                title = "Route only (Sniffing)",
-                summary = "Use sniffed domain only for routing rules",
+                title = stringResource(R.string.route_only_sniffing),
+                summary = stringResource(R.string.use_sniffed_domain_only_for_routing_rules),
                 checked = s.routeOnly,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(routeOnly = v) } },
             )
             SettingsSwitchRow(
-                title = "Block ads",
-                summary = "Block advertising domains",
+                title = stringResource(R.string.block_ads),
+                summary = stringResource(R.string.block_advertising_domains),
                 checked = s.blockAds,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(blockAds = v) } },
             )
         }
 
         SettingsSectionCard(
-            title = "DNS Configuration",
+            title = stringResource(R.string.dns_configuration),
             expanded = dnsExpanded,
             onExpandedChange = { dnsExpanded = it },
         ) {
             SettingsSwitchRow(
-                title = "Enable Local DNS",
-                summary = "Intercept port 53 to internal dns-out",
+                title = stringResource(R.string.enable_local_dns),
+                summary = stringResource(R.string.intercept_port_53_to_internal_dns_out),
                 checked = s.localDnsEnabled,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(localDnsEnabled = v) } },
             )
             SettingsEditRow(
-                title = "Remote DNS",
+                title = stringResource(R.string.remote_dns),
                 value = s.remoteDns,
                 onValueChanged = { v -> viewModel.updateSettings { it.copy(remoteDns = v.ifBlank { "https://cloudflare-dns.com/dns-query" }) } },
             )
             SettingsEditRow(
-                title = "Direct DNS",
+                title = stringResource(R.string.direct_dns),
                 value = s.directDns,
                 onValueChanged = { v -> viewModel.updateSettings { it.copy(directDns = v.ifBlank { "223.5.5.5" }) } },
             )
             SettingsEditRow(
-                title = "VPN DNS",
+                title = stringResource(R.string.vpn_dns),
                 value = s.vpnDns,
                 onValueChanged = { v -> viewModel.updateSettings { it.copy(vpnDns = v.ifBlank { "1.1.1.1" }) } },
             )
             SettingsSwitchRow(
-                title = "Enable FakeDNS",
-                summary = "Return synthetic IPs (198.18.0.0/15) for faster DNS response",
+                title = stringResource(R.string.enable_fakedns),
+                summary = stringResource(R.string.return_synthetic_ips_198_18_0_0_15_for_faster_dn),
                 checked = s.fakeDns,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(fakeDns = v) } },
             )
             SettingsEditRow(
-                title = "Real ping test URL",
+                title = stringResource(R.string.real_ping_test_url),
                 value = s.delayTestUrl,
                 onValueChanged = { v -> viewModel.updateSettings { it.copy(delayTestUrl = v.ifBlank { "https://www.gstatic.com/generate_204" }) } },
             )
         }
 
         SettingsSectionCard(
-            title = "TLS Fragment (Anti-DPI)",
+            title = stringResource(R.string.tls_fragment_anti_dpi),
             expanded = fragmentExpanded,
             onExpandedChange = { fragmentExpanded = it },
         ) {
             SettingsSwitchRow(
-                title = "Enable TLS Fragment",
+                title = stringResource(R.string.enable_tls_fragment),
                 summary = if (s.fragmentEnabled) "${s.fragmentPackets} | len=${s.fragmentLength} | delay=${s.fragmentInterval}ms" else "Split TLS ClientHello packets to bypass DPI",
                 checked = s.fragmentEnabled,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(fragmentEnabled = v) } },
             )
             if (s.fragmentEnabled) {
                 SettingsListRow(
-                    title = "Fragment packets",
+                    title = stringResource(R.string.fragment_packets),
                     options = listOf(
                         "tlshello" to "tlshello (TLS ClientHello only)",
                         "1-2" to "1-2 (First 1-2 TCP packets)",
@@ -266,12 +266,12 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                     onSelected = { v -> viewModel.updateSettings { it.copy(fragmentPackets = v) } },
                 )
                 SettingsEditRow(
-                    title = "Fragment length (bytes)",
+                    title = stringResource(R.string.fragment_length_bytes),
                     value = s.fragmentLength,
                     onValueChanged = { v -> viewModel.updateSettings { it.copy(fragmentLength = v.ifBlank { "50-100" }) } },
                 )
                 SettingsEditRow(
-                    title = "Fragment interval (ms)",
+                    title = stringResource(R.string.fragment_interval_ms),
                     value = s.fragmentInterval,
                     onValueChanged = { v -> viewModel.updateSettings { it.copy(fragmentInterval = v.ifBlank { "10-20" }) } },
                 )
@@ -279,19 +279,19 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
         }
 
         SettingsSectionCard(
-            title = "Multiplex (Mux)",
+            title = stringResource(R.string.multiplex_mux),
             expanded = muxExpanded,
             onExpandedChange = { muxExpanded = it },
         ) {
             SettingsSwitchRow(
-                title = "Enable Multiplex (Mux)",
-                summary = "Multiplex TCP connections over a single stream",
+                title = stringResource(R.string.enable_multiplex_mux),
+                summary = stringResource(R.string.multiplex_tcp_connections_over_a_single_stream),
                 checked = s.tcpMux,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(tcpMux = v) } },
             )
             if (s.tcpMux) {
                 SettingsEditRow(
-                    title = "Mux concurrency",
+                    title = stringResource(R.string.mux_concurrency),
                     value = s.muxConcurrency.toString(),
                     onValueChanged = { text ->
                         text.toIntOrNull()?.let { c ->
@@ -300,7 +300,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                     },
                 )
                 SettingsEditRow(
-                    title = "XUDP concurrency",
+                    title = stringResource(R.string.xudp_concurrency),
                     value = s.muxXudpConcurrency.toString(),
                     onValueChanged = { text ->
                         text.toIntOrNull()?.let { c ->
@@ -310,20 +310,20 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 )
             }
             SettingsSwitchRow(
-                title = "TCP Fast Open",
-                summary = "Reduce initial handshake latency where supported",
+                title = stringResource(R.string.tcp_fast_open),
+                summary = stringResource(R.string.reduce_initial_handshake_latency_where_supported),
                 checked = s.tcpFastOpen,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(tcpFastOpen = v) } },
             )
         }
 
         SettingsSectionCard(
-            title = "Automation & Notifications",
+            title = stringResource(R.string.automation_notifications),
             expanded = automationExpanded,
             onExpandedChange = { automationExpanded = it },
         ) {
             SettingsSwitchRow(
-                title = "Auto-update subscriptions",
+                title = stringResource(R.string.auto_update_subscriptions),
                 summary = if (s.autoUpdateSubscriptions) {
                     "Enabled · every ${s.subscriptionUpdateIntervalHours} hours, with a notification"
                 } else {
@@ -336,7 +336,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
             )
             if (s.autoUpdateSubscriptions) {
                 SettingsListRow(
-                    title = "Subscription update interval",
+                    title = stringResource(R.string.subscription_update_interval),
                     options = listOf(
                         "6" to "Every 6 hours",
                         "12" to "Every 12 hours",
@@ -348,8 +348,8 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                     },
                 )
                 SettingsSwitchRow(
-                    title = "Notify after subscription update",
-                    summary = "Show updated groups and imported server counts",
+                    title = stringResource(R.string.notify_after_subscription_update),
+                    summary = stringResource(R.string.show_updated_groups_and_imported_server_counts),
                     checked = s.notifySubscriptionUpdates,
                     onCheckedChange = { enabled ->
                         viewModel.updateSettings { it.copy(notifySubscriptionUpdates = enabled) }
@@ -357,7 +357,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 )
             }
             SettingsSwitchRow(
-                title = "Check for new app versions",
+                title = stringResource(R.string.check_for_new_app_versions),
                 summary = if (s.autoCheckAppUpdates) {
                     "Check GitHub Releases daily and alert when a newer version is published"
                 } else {
@@ -369,29 +369,29 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 },
             )
             SettingsSwitchRow(
-                title = "Notify about new versions",
-                summary = "Show one alert for each new GitHub release",
+                title = stringResource(R.string.notify_about_new_versions),
+                summary = stringResource(R.string.show_one_alert_for_each_new_github_release),
                 checked = s.notifyAppUpdates,
                 onCheckedChange = { enabled ->
                     viewModel.updateSettings { it.copy(notifyAppUpdates = enabled) }
                 },
             )
             SettingsMenuRow(
-                title = "Check for updates now",
-                subtitle = "Check the latest JavidTun release on GitHub",
+                title = stringResource(R.string.check_for_updates_now),
+                subtitle = stringResource(R.string.check_the_latest_javidtun_release_on_github),
                 onClick = { viewModel.checkForAppUpdates() },
             )
             SettingsSwitchRow(
-                title = "Clipboard import prompt",
-                summary = "Ask before importing a copied link or config when the app opens",
+                title = stringResource(R.string.clipboard_import_prompt),
+                summary = stringResource(R.string.ask_before_importing_a_copied_link_or_config_whe),
                 checked = s.clipboardAutoImport,
                 onCheckedChange = { enabled ->
                     viewModel.updateSettings { it.copy(clipboardAutoImport = enabled) }
                 },
             )
             SettingsSwitchRow(
-                title = "Slow server alert",
-                summary = "Notify after a latency test exceeds the chosen limit",
+                title = stringResource(R.string.slow_server_alert),
+                summary = stringResource(R.string.notify_after_a_latency_test_exceeds_the_chosen_l),
                 checked = s.notifySlowServers,
                 onCheckedChange = { enabled ->
                     viewModel.updateSettings { it.copy(notifySlowServers = enabled) }
@@ -399,7 +399,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
             )
             if (s.notifySlowServers) {
                 SettingsListRow(
-                    title = "Slow server threshold",
+                    title = stringResource(R.string.slow_server_threshold),
                     options = listOf(
                         "300" to "300 ms",
                         "500" to "500 ms",
@@ -415,7 +415,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
         }
 
         SettingsSectionCard(
-            title = "Appearance & Core",
+            title = stringResource(R.string.appearance_core),
             expanded = uiExpanded,
             onExpandedChange = { uiExpanded = it },
         ) {

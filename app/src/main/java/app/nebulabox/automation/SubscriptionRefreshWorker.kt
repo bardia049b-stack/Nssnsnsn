@@ -3,6 +3,7 @@ package app.nebulabox.automation
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import app.nebulabox.R
 import app.nebulabox.Application
 import app.nebulabox.data.ProfileStore
 import app.nebulabox.data.SettingsStore
@@ -55,17 +56,23 @@ class SubscriptionRefreshWorker(
 
         if (settings.notifySubscriptionUpdates) {
             val message = when {
-                updatedGroups > 0 && failedGroups > 0 ->
-                    "Updated $updatedGroups group(s), $updatedProfiles server(s); $failedGroups failed"
-                updatedGroups > 0 ->
-                    "Updated $updatedGroups group(s) and $updatedProfiles server(s)"
-                else ->
-                    "No subscription could be updated. Existing servers were kept."
+                updatedGroups > 0 && failedGroups > 0 -> applicationContext.getString(
+                    R.string.subscription_update_partial,
+                    updatedGroups,
+                    updatedProfiles,
+                    failedGroups,
+                )
+                updatedGroups > 0 -> applicationContext.getString(
+                    R.string.subscription_update_ok,
+                    updatedGroups,
+                    updatedProfiles,
+                )
+                else -> applicationContext.getString(R.string.subscription_update_none)
             }
             AutomationNotifications.show(
                 context = applicationContext,
                 notificationId = Application.NOTIFICATION_SUBSCRIPTION_UPDATE,
-                title = "Subscription update finished",
+                title = applicationContext.getString(R.string.subscription_update_finished),
                 message = message,
             )
         }

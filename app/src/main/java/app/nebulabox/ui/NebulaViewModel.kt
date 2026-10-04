@@ -342,7 +342,7 @@ class NebulaViewModel(
         AutomationNotifications.show(
             context = application,
             notificationId = notificationId,
-            title = "Slow server",
+            title = application.getString(R.string.slow_server),
             message = "${profile.displayName}: $delayMs ms (threshold $threshold ms)",
         )
     }

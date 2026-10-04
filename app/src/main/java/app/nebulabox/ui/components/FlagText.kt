@@ -20,6 +20,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.nebulabox.R
@@ -74,7 +75,7 @@ fun FlagText(
             ) {
                 Image(
                     painter = painterResource(id = R.drawable.ic_flag_lion_sun),
-                    contentDescription = "Iran",
+                    contentDescription = stringResource(R.string.iran),
                     modifier = Modifier.fillMaxSize(),
                 )
             },
@@ -104,7 +105,7 @@ fun CountryFlagIcon(
     if (isIran) {
         Image(
             painter = painterResource(id = R.drawable.ic_flag_lion_sun),
-            contentDescription = "Iran",
+            contentDescription = stringResource(R.string.iran),
             modifier = modifier.size(size),
         )
     } else if (flagEmoji.isNotBlank()) {

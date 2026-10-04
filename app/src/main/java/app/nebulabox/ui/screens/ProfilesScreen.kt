@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -318,12 +319,12 @@ fun ProfilesScreen(
                             }
                         },
                     ) {
-                        Text("Download")
+                        Text(stringResource(R.string.download))
                     }
                     IconButton(onClick = { viewModel.dismissUpdateBanner() }) {
                         Icon(
                             imageVector = Icons.Filled.Close,
-                            contentDescription = "Dismiss",
+                            contentDescription = stringResource(R.string.dismiss),
                             tint = MaterialTheme.colorScheme.onTertiaryContainer,
                         )
                     }
@@ -365,7 +366,7 @@ fun ProfilesScreen(
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
                     ) {
                         TextButton(onClick = { selectedProfileIds = emptySet() }) {
-                            Text("Cancel")
+                            Text(stringResource(R.string.cancel))
                         }
                         TextButton(
                             onClick = {
@@ -380,10 +381,10 @@ fun ProfilesScreen(
                                 }
                             },
                         ) {
-                            Text("Export")
+                            Text(stringResource(R.string.export))
                         }
                         TextButton(onClick = { pendingDeleteIds = selectedProfileIds }) {
-                            Text("Delete", color = MaterialTheme.colorScheme.error)
+                            Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
@@ -457,7 +458,7 @@ fun ProfilesScreen(
     clipboardCandidate?.let { candidate ->
         AlertDialog(
             onDismissRequest = { clipboardCandidate = null },
-            title = { Text("Import from clipboard?") },
+            title = { Text(stringResource(R.string.import_from_clipboard_260)) },
             text = {
                 Text(
                     candidate.take(180).let { if (candidate.length > 180) "$it…" else it },
@@ -471,12 +472,12 @@ fun ProfilesScreen(
                         viewModel.submitImportText(candidate)
                     },
                 ) {
-                    Text("Import")
+                    Text(stringResource(R.string.import_action))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { clipboardCandidate = null }) {
-                    Text("Not now")
+                    Text(stringResource(R.string.not_now))
                 }
             },
         )
@@ -551,7 +552,7 @@ fun ProfilesScreen(
 
     if (showDeleteDupConfirm) {
         ConfirmActionDialog(
-            title = "Remove duplicate configs?",
+            title = stringResource(R.string.remove_duplicate_configs_635),
             message = "Remove configurations with identical protocol, address, port, credentials, and transport settings.",
             onDismiss = { showDeleteDupConfirm = false },
             onConfirm = {
@@ -563,8 +564,8 @@ fun ProfilesScreen(
 
     if (showDeleteInvalidConfirm) {
         ConfirmActionDialog(
-            title = "Remove invalid configs?",
-            message = "Remove all configurations that failed (-1 ms) during the last test.",
+            title = stringResource(R.string.remove_invalid_configs_119),
+            message = stringResource(R.string.remove_all_configurations_that_failed_1_ms_durin),
             onDismiss = { showDeleteInvalidConfirm = false },
             onConfirm = {
                 showDeleteInvalidConfirm = false
@@ -575,8 +576,8 @@ fun ProfilesScreen(
 
     if (showDeleteAllConfirm) {
         ConfirmActionDialog(
-            title = "Remove all configs?",
-            message = "Remove all configurations in the current group.",
+            title = stringResource(R.string.remove_all_configs),
+            message = stringResource(R.string.remove_all_configurations_in_the_current_group),
             onDismiss = { showDeleteAllConfirm = false },
             onConfirm = {
                 showDeleteAllConfirm = false
@@ -588,7 +589,7 @@ fun ProfilesScreen(
     pendingDeleteProfile?.let { profile ->
         ConfirmActionDialog(
             title = "Delete ‘${profile.displayName}’?",
-            message = "This configuration will be removed from this device.",
+            message = stringResource(R.string.this_configuration_will_be_removed_from_this_dev),
             onDismiss = { pendingDeleteProfile = null },
             onConfirm = {
                 pendingDeleteProfile = null
@@ -601,7 +602,7 @@ fun ProfilesScreen(
         val count = pendingDeleteIds.size
         ConfirmActionDialog(
             title = "Delete $count selected configurations?",
-            message = "This action cannot be undone.",
+            message = stringResource(R.string.this_action_cannot_be_undone),
             onDismiss = { pendingDeleteIds = emptySet() },
             onConfirm = {
                 val ids = pendingDeleteIds
