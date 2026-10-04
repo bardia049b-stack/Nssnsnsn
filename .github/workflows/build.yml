@@ -51,6 +51,9 @@ jobs:
             "https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.9.30/libv2ray.aar"
           ls -lh ${{ github.workspace }}/app/libs/libv2ray.aar
 
+      - name: Check geo data
+        run: python3 ${{ github.workspace }}/tools/check_geo_assets.py
+
       - name: Grant execute permission
         run: chmod +x ${{ github.workspace }}/gradlew
 

@@ -115,7 +115,19 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
     }
 
+    private fun isConfigFailure(reason: String): Boolean {
+        val text = reason.lowercase()
+        return text.contains("config error") ||
+            text.contains("failed to parse json") ||
+            text.contains("invalid field") ||
+            ConfigBuilder.isGeoError(reason)
+    }
+
     private fun scheduleReconnect(reason: String) {
+        if (isConfigFailure(reason)) {
+            AppLogger.w(TAG, "Not retrying, this configuration cannot be loaded: $reason")
+            return
+        }
         if (reconnectJob?.isActive == true) return
         val wanted = desiredProfileId ?: lastProfileId ?: return
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
@@ -191,13 +203,20 @@ class TunnelVpnService : VpnService(), TunProvider {
                 engine.start(activeProfileName, config, safeMtu) { openTun(settings) }
             } catch (geoErr: Throwable) {
                 val msg = geoErr.message.orEmpty()
-                if (msg.contains("geodata") || msg.contains("geosite") || msg.contains("geoip")) {
-                    AppLogger.w(TAG, "Geodata error detected ($msg), retrying without geo rules...")
-                    val fallbackConfig = ConfigBuilder.buildWithoutGeoRules(profile, settings)
-                    AppLogger.recordGeneratedConfig(fallbackConfig)
+                if (!ConfigBuilder.isGeoError(msg)) throw geoErr
+
+                AppLogger.w(TAG, "Geodata error, retrying without the geo presets: $msg")
+                val fallbackConfig = ConfigBuilder.buildWithoutGeoRules(profile, settings)
+                AppLogger.recordGeneratedConfig(fallbackConfig)
+                try {
                     engine.start(activeProfileName, fallbackConfig, safeMtu) { openTun(settings) }
-                } else {
-                    throw geoErr
+                } catch (secondErr: Throwable) {
+                    val second = secondErr.message.orEmpty()
+                    if (!ConfigBuilder.isGeoError(second)) throw secondErr
+                    AppLogger.w(TAG, "Geodata error again, retrying with every geo reference removed")
+                    val bareConfig = ConfigBuilder.stripAllGeoRules(fallbackConfig)
+                    AppLogger.recordGeneratedConfig(bareConfig)
+                    engine.start(activeProfileName, bareConfig, safeMtu) { openTun(settings) }
                 }
             }
 

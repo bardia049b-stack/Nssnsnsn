@@ -31,7 +31,7 @@ object ConfigBuilder {
     fun buildWithoutGeoRules(profile: Profile, settings: AppSettings): String {
         val s = settings.normalized()
         if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
-            return buildCustomConfig(profile, s)
+            return buildCustomConfig(profile, s, includeGeoRules = false)
         }
         return buildNormalConfig(profile, s, includeGeoRules = false)
     }
@@ -184,7 +184,14 @@ object ConfigBuilder {
 
         HostResolver.resolveOutboundDomainsToHosts(settings, coreConfig)
 
-        return JsonSerializer.toJsonPretty(coreConfig) ?: "{}"
+        return finish(coreConfig)
+    }
+
+    private fun finish(coreConfig: CoreConfig): String {
+        val json = JsonSerializer.parseString(JsonSerializer.toJsonPretty(coreConfig) ?: "{}")
+        if (json == null) return "{}"
+        GeoCatalog.sanitize(json)
+        return JsonSerializer.toJsonPretty(json) ?: "{}"
     }
 
     private fun buildSpeedtestConfig(
@@ -215,6 +222,7 @@ object ConfigBuilder {
     private fun buildCustomConfig(
         profile: Profile,
         settings: AppSettings,
+        includeGeoRules: Boolean = true,
     ): String {
         val raw = profile.customConfig.trim()
         val json = JsonSerializer.parseString(raw) ?: return raw
@@ -226,9 +234,9 @@ object ConfigBuilder {
                 val coreConfig = initCoreConfig(settings)
                 coreConfig.remarks = profile.displayName
                 coreConfig.outbounds.add(0, outboundBean)
-                RoutingConfigBuilder.configureRouting(profile, settings, coreConfig, includeGeoRules = true)
-                DnsConfigBuilder.configureDns(settings, coreConfig, includeGeoRules = true)
-                return JsonSerializer.toJsonPretty(coreConfig) ?: raw
+                RoutingConfigBuilder.configureRouting(profile, settings, coreConfig, includeGeoRules)
+                DnsConfigBuilder.configureDns(settings, coreConfig, includeGeoRules)
+                return finish(coreConfig)
             }
         }
 
@@ -245,6 +253,7 @@ object ConfigBuilder {
         }
 
         if (settings.useHevTun) {
+            GeoCatalog.sanitize(json)
             return JsonSerializer.toJsonPretty(json) ?: raw
         }
 
@@ -274,7 +283,22 @@ object ConfigBuilder {
             inbounds.add(tunInbound)
         }
 
+        GeoCatalog.sanitize(json)
         return JsonSerializer.toJsonPretty(json) ?: raw
+    }
+
+    fun stripAllGeoRules(config: String): String {
+        val json = JsonSerializer.parseString(config) ?: return config
+        GeoCatalog.stripAll(json)
+        return JsonSerializer.toJsonPretty(json) ?: config
+    }
+
+    fun isGeoError(message: String): Boolean {
+        val text = message.lowercase()
+        return text.contains("geodata") ||
+            text.contains("geosite") ||
+            text.contains("geoip") ||
+            text.contains("failed to check code")
     }
 
     fun validate(config: String): String? = runCatching {

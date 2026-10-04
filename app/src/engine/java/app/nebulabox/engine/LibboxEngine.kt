@@ -27,7 +27,7 @@ import java.net.InetSocketAddress
 
 private const val TAG = "XrayEngine"
 
-private const val GEO_ASSET_VERSION = 2
+private const val GEO_ASSET_VERSION = 3
 private const val GEO_ASSET_VERSION_FILE = "geo_assets.version"
 
 class LibboxEngine : TunnelEngine {
@@ -125,9 +125,9 @@ class LibboxEngine : TunnelEngine {
         val storedVersion = runCatching { versionFile.readText().trim().toInt() }.getOrDefault(0)
         val refresh = force || storedVersion != GEO_ASSET_VERSION
         val geoFiles = listOf(
-            "geosite.dat" to 1_000_000L,
-            "geoip.dat" to 1_000_000L,
-            "geoip-only-cn-private.dat" to 50_000L,
+            "geosite.dat" to 2_000_000L,
+            "geoip.dat" to 1_500_000L,
+            "geoip-only-cn-private.dat" to 100_000L,
         )
         for ((name, minBytes) in geoFiles) {
             val outFile = File(targetDir, name)
