@@ -3,8 +3,6 @@ package app.nebulabox.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,7 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,22 +39,16 @@ import app.nebulabox.data.Protocol
 import app.nebulabox.ui.colorPing
 import app.nebulabox.ui.colorPingRed
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ServerProfileCard(
     profile: Profile,
     isSelected: Boolean,
     subscriptionBadge: String,
-    isMultiSelectMode: Boolean = false,
-    isChecked: Boolean = false,
     onSelect: () -> Unit,
     onShare: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onDuplicate: () -> Unit,
     onPingSingle: () -> Unit,
-    onLongPress: () -> Unit,
-    onToggleSelected: () -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     val testResult = profile.testDelayString
@@ -96,10 +87,7 @@ fun ServerProfileCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .combinedClickable(
-                onClick = { if (isMultiSelectMode) onToggleSelected() else onSelect() },
-                onLongClick = onLongPress,
-            ),
+            .clickable { onSelect() },
         shape = RoundedCornerShape(14.dp),
         color = cardColor,
         border = borderStroke,
@@ -110,26 +98,18 @@ fun ServerProfileCard(
                 .padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (isMultiSelectMode) {
-                Checkbox(
-                    checked = isChecked,
-                    onCheckedChange = { onToggleSelected() },
-                    modifier = Modifier.size(32.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-            } else {
-                Box(
-                    modifier = Modifier
-                        .width(3.dp)
-                        .height(34.dp)
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(
-                            if (isSelected) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
-                        ),
-                )
-                Spacer(Modifier.width(12.dp))
-            }
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(
+                        if (isSelected) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    ),
+            )
+
+            Spacer(Modifier.width(12.dp))
 
             Column(
                 modifier = Modifier.weight(1f),
@@ -203,13 +183,6 @@ fun ServerProfileCard(
                         onClick = {
                             showMenu = false
                             onShare()
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Duplicate") },
-                        onClick = {
-                            showMenu = false
-                            onDuplicate()
                         },
                     )
                     DropdownMenuItem(

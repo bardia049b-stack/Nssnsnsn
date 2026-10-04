@@ -66,7 +66,6 @@ fun JavidTopBar(
     onCancelTesting: () -> Unit,
     onImportClipboard: () -> Unit,
     onImportUrlOrText: () -> Unit,
-    onScanQr: () -> Unit,
     onNewProtocol: (Protocol) -> Unit,
     onRestartService: () -> Unit,
     onPingAllTcp: () -> Unit,
@@ -203,13 +202,6 @@ fun JavidTopBar(
                             onClick = {
                                 showImportMenu = false
                                 onImportUrlOrText()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Scan QR code") },
-                            onClick = {
-                                showImportMenu = false
-                                onScanQr()
                             },
                         )
                         AppDivider()

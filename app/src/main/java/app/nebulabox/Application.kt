@@ -5,21 +5,13 @@ import android.app.NotificationManager
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Build
-import app.nebulabox.automation.AutomationScheduler
-import app.nebulabox.automation.NetworkReconnectMonitor
-import app.nebulabox.data.SettingsStore
 import app.nebulabox.locale.LocaleManager
 import app.nebulabox.util.AppLogger
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 
 class Application : android.app.Application() {
 
     lateinit var prefs: SharedPreferences
         private set
-    private var networkReconnectMonitor: NetworkReconnectMonitor? = null
 
     override fun onCreate() {
         instance = this
@@ -28,10 +20,6 @@ class Application : android.app.Application() {
         prefs = getSharedPreferences("nebula", Context.MODE_PRIVATE)
         LocaleManager.applyStoredLocale(this)
         createNotificationChannels()
-        networkReconnectMonitor = NetworkReconnectMonitor(this).also { it.start() }
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
-            AutomationScheduler.sync(this@Application, SettingsStore(this@Application).current())
-        }
     }
 
     private fun createNotificationChannels() {
@@ -45,21 +33,11 @@ class Application : android.app.Application() {
             setShowBadge(false)
             setSound(null, null)
         }
-        val updates = NotificationChannel(
-            CHANNEL_UPDATES,
-            getString(R.string.channel_updates),
-            NotificationManager.IMPORTANCE_DEFAULT,
-        ).apply {
-            setShowBadge(true)
-        }
-        manager.createNotificationChannels(listOf(tunnel, updates))
+        manager.createNotificationChannel(tunnel)
     }
 
     companion object {
         const val CHANNEL_TUNNEL = "tunnel"
-        const val CHANNEL_UPDATES = "updates"
-        const val NOTIFICATION_SUBSCRIPTION_UPDATE = 2201
-        const val NOTIFICATION_RELEASE_UPDATE = 2202
 
         lateinit var instance: Application
             private set

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,13 +34,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -79,60 +78,63 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
     var isLoading by remember { mutableStateOf(true) }
 
     LaunchedEffect(Unit) {
-        allApps = withContext(Dispatchers.IO) {
-            val packageManager = context.packageManager
-            runCatching {
-                packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
-                    .asSequence()
-                    .filter { it.packageName != context.packageName }
-                    .map { appInfo ->
-                        val label = runCatching {
-                            packageManager.getApplicationLabel(appInfo).toString()
-                        }.getOrDefault(appInfo.packageName)
-                        val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
-                            (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
-                        val icon = runCatching {
-                            drawableToImageBitmap(packageManager.getApplicationIcon(appInfo))
-                        }.getOrNull()
-                        InstalledAppEntry(
-                            packageName = appInfo.packageName,
-                            label = label,
-                            isSystem = isSystem,
-                            iconBitmap = icon,
-                        )
-                    }
-                    .sortedBy { it.label.lowercase() }
-                    .toList()
+        withContext(Dispatchers.IO) {
+            val pm = context.packageManager
+            val packages = runCatching {
+                pm.getInstalledApplications(PackageManager.GET_META_DATA)
             }.getOrDefault(emptyList())
+
+            val loaded = packages
+                .asSequence()
+                .filter { it.packageName != context.packageName }
+                .map { appInfo ->
+                    val label = runCatching { pm.getApplicationLabel(appInfo).toString() }
+                        .getOrDefault(appInfo.packageName)
+                    val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0 &&
+                        (appInfo.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) == 0
+                    val bmp = runCatching {
+                        drawableToImageBitmap(pm.getApplicationIcon(appInfo))
+                    }.getOrNull()
+                    InstalledAppEntry(
+                        packageName = appInfo.packageName,
+                        label = label,
+                        isSystem = isSystem,
+                        iconBitmap = bmp,
+                    )
+                }
+                .sortedBy { it.label.lowercase() }
+                .toList()
+
+            withContext(Dispatchers.Main) {
+                allApps = loaded
+                isLoading = false
+            }
         }
-        isLoading = false
     }
 
     val filteredApps = remember(allApps, searchQuery, showSystemApps, settings.perAppPackages) {
-        allApps.asSequence()
-            .filter { showSystemApps || !it.isSystem || it.packageName in settings.perAppPackages }
-            .filter {
-                searchQuery.isBlank() ||
-                    it.label.contains(searchQuery, ignoreCase = true) ||
-                    it.packageName.contains(searchQuery, ignoreCase = true)
-            }
-            .sortedWith(
-                compareByDescending<InstalledAppEntry> { it.packageName in settings.perAppPackages }
-                    .thenBy { it.label.lowercase() },
-            )
-            .toList()
+        allApps.filter { app ->
+            val matchesSystem = showSystemApps || !app.isSystem || app.packageName in settings.perAppPackages
+            val matchesQuery = searchQuery.isBlank() ||
+                app.label.contains(searchQuery, ignoreCase = true) ||
+                app.packageName.contains(searchQuery, ignoreCase = true)
+            matchesSystem && matchesQuery
+        }.sortedWith(
+            compareByDescending<InstalledAppEntry> { it.packageName in settings.perAppPackages }
+                .thenBy { it.label.lowercase() },
+        )
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 10.dp)
-                .clip(RoundedCornerShape(20.dp))
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .clip(RoundedCornerShape(16.dp))
                 .clickable {
                     viewModel.updateSettings { it.copy(perAppEnabled = !settings.perAppEnabled) }
                 },
-            shape = RoundedCornerShape(20.dp),
+            shape = RoundedCornerShape(16.dp),
             color = if (settings.perAppEnabled) {
                 MaterialTheme.colorScheme.primaryContainer
             } else {
@@ -142,8 +144,9 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 18.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -156,21 +159,19 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                             MaterialTheme.colorScheme.onSurface
                         },
                     )
-                    Spacer(Modifier.height(3.dp))
+                    Spacer(Modifier.height(2.dp))
                     Text(
                         text = if (settings.perAppEnabled) {
-                            "${settings.perAppPackages.size} selected · ${settings.perAppModeLabel()} · reconnect to apply"
+                            "${settings.perAppPackages.size} apps selected"
                         } else {
-                            "Off · selected apps are saved but not applied"
+                            "Disabled · All apps use tunnel"
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = if (settings.perAppEnabled) {
-                            MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.82f)
+                            MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 Switch(
@@ -182,108 +183,67 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
             }
         }
 
-        Text(
-            text = "Proxy mode",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 8.dp),
-        )
-
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            val bypassSelected = settings.perAppMode == "exclude"
-            if (bypassSelected) {
-                FilledTonalButton(
-                    onClick = { viewModel.updateSettings { it.copy(perAppMode = "exclude") } },
-                    modifier = Modifier.weight(1f).height(46.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                ) {
-                    Text("Bypass selected", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            } else {
-                OutlinedButton(
-                    onClick = { viewModel.updateSettings { it.copy(perAppMode = "exclude") } },
-                    modifier = Modifier.weight(1f).height(46.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                ) {
-                    Text("Bypass selected", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            if (!bypassSelected) {
-                FilledTonalButton(
-                    onClick = { viewModel.updateSettings { it.copy(perAppMode = "include") } },
-                    modifier = Modifier.weight(1f).height(46.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                ) {
-                    Text("Only proxy selected", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            } else {
-                OutlinedButton(
-                    onClick = { viewModel.updateSettings { it.copy(perAppMode = "include") } },
-                    modifier = Modifier.weight(1f).height(46.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                ) {
-                    Text("Only proxy selected", maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-        }
-
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
-                .padding(top = 12.dp),
-            singleLine = true,
-            shape = RoundedCornerShape(16.dp),
-            placeholder = { Text("Search apps…") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-            trailingIcon = {
-                if (searchQuery.isNotEmpty()) {
-                    IconButton(onClick = { searchQuery = "" }) {
-                        Icon(Icons.Filled.Clear, contentDescription = "Clear search")
-                    }
-                }
-            },
-        )
-
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             FilterChip(
-                selected = showSystemApps,
-                onClick = { showSystemApps = !showSystemApps },
-                label = { Text("System apps") },
+                selected = settings.perAppMode == "exclude",
+                onClick = { viewModel.updateSettings { it.copy(perAppMode = "exclude") } },
+                label = { Text("Bypass Selected") },
+            )
+            FilterChip(
+                selected = settings.perAppMode == "include",
+                onClick = { viewModel.updateSettings { it.copy(perAppMode = "include") } },
+                label = { Text("Only Proxy Selected") },
             )
             Spacer(Modifier.weight(1f))
             if (settings.perAppPackages.isNotEmpty()) {
                 TextButton(
                     onClick = { viewModel.updateSettings { it.copy(perAppPackages = emptySet()) } },
                 ) {
-                    Text("Clear selection")
+                    Text("Clear")
                 }
             }
-            Text(
-                text = "${filteredApps.size}",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 4.dp),
+        }
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                shape = RoundedCornerShape(12.dp),
+                placeholder = { Text("Search apps...") },
+                leadingIcon = {
+                    Icon(Icons.Outlined.Search, contentDescription = null)
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Filled.Clear, contentDescription = "Clear")
+                        }
+                    }
+                },
+            )
+            FilterChip(
+                selected = showSystemApps,
+                onClick = { showSystemApps = !showSystemApps },
+                label = { Text("System") },
             )
         }
 
         HorizontalDivider(
+            modifier = Modifier.padding(top = 4.dp),
             thickness = 0.5.dp,
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
         )
@@ -292,17 +252,6 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-        } else if (filteredApps.isEmpty()) {
-            Box(
-                modifier = Modifier.fillMaxSize().padding(24.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "No matching apps",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         } else {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -310,13 +259,17 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
             ) {
                 items(filteredApps, key = { it.packageName }) { app ->
                     val isChecked = app.packageName in settings.perAppPackages
-                    val onToggle = {
-                        val updated = settings.perAppPackages.toMutableSet()
-                        if (isChecked) updated.remove(app.packageName) else updated.add(app.packageName)
-                        viewModel.updateSettings { it.copy(perAppPackages = updated) }
-                    }
                     ListItem(
-                        modifier = Modifier.clickable(onClick = onToggle),
+                        modifier = Modifier.clickable {
+                            val updated = settings.perAppPackages.toMutableSet()
+                            if (isChecked) updated.remove(app.packageName) else updated.add(app.packageName)
+                            viewModel.updateSettings {
+                                it.copy(
+                                    perAppEnabled = if (updated.isNotEmpty() && !it.perAppEnabled) true else it.perAppEnabled,
+                                    perAppPackages = updated,
+                                )
+                            }
+                        },
                         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         leadingContent = {
                             if (app.iconBitmap != null) {
@@ -324,13 +277,13 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                                     bitmap = app.iconBitmap,
                                     contentDescription = null,
                                     modifier = Modifier
-                                        .size(42.dp)
-                                        .clip(RoundedCornerShape(12.dp)),
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(10.dp)),
                                 )
                             } else {
                                 Surface(
-                                    modifier = Modifier.size(42.dp),
-                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(40.dp),
+                                    shape = RoundedCornerShape(10.dp),
                                     color = MaterialTheme.colorScheme.surfaceVariant,
                                 ) {}
                             }
@@ -354,7 +307,19 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                             )
                         },
                         trailingContent = {
-                            Switch(checked = isChecked, onCheckedChange = { onToggle() })
+                            Switch(
+                                checked = isChecked,
+                                onCheckedChange = { checked ->
+                                    val updated = settings.perAppPackages.toMutableSet()
+                                    if (checked) updated.add(app.packageName) else updated.remove(app.packageName)
+                                    viewModel.updateSettings {
+                                        it.copy(
+                                            perAppEnabled = if (updated.isNotEmpty() && !it.perAppEnabled) true else it.perAppEnabled,
+                                            perAppPackages = updated,
+                                        )
+                                    }
+                                },
+                            )
                         },
                     )
                     HorizontalDivider(
@@ -367,9 +332,6 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
         }
     }
 }
-
-private fun app.nebulabox.data.AppSettings.perAppModeLabel(): String =
-    if (perAppMode == "include") "Only selected apps" else "Bypass selected apps"
 
 private fun drawableToImageBitmap(drawable: Drawable): ImageBitmap {
     if (drawable is BitmapDrawable && drawable.bitmap != null) {

@@ -6,8 +6,6 @@ import android.net.VpnService
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import app.nebulabox.automation.AutomationNotifications
-import app.nebulabox.automation.AutomationScheduler
 import app.nebulabox.config.ConfigBuilder
 import app.nebulabox.data.AppSettings
 import app.nebulabox.data.Profile
@@ -299,7 +297,6 @@ class NebulaViewModel(
                 val currentSettings = settingsStore.current().normalized()
                 val delayMs = runSingleRealPing(profile, currentSettings)
                 profileStore.updateDelays(mapOf(profile.id to delayMs))
-                notifySlowProfile(profile, delayMs, currentSettings)
                 if (delayMs > 0) {
                     snack.emit("${profile.displayName}: $delayMs ms")
                 } else {
@@ -309,18 +306,6 @@ class NebulaViewModel(
                 _testingProfileIds.value = _testingProfileIds.value - profile.id
             }
         }
-    }
-
-    private fun notifySlowProfile(profile: Profile, delayMs: Int, currentSettings: AppSettings) {
-        val threshold = currentSettings.slowServerThresholdMs.coerceIn(100, 5000)
-        if (!currentSettings.notifySlowServers || delayMs < threshold) return
-        val notificationId = 3000 + kotlin.math.abs(profile.id.hashCode() % 1_000_000)
-        AutomationNotifications.show(
-            context = application,
-            notificationId = notificationId,
-            title = "Slow server",
-            message = "${profile.displayName}: $delayMs ms (threshold $threshold ms)",
-        )
     }
 
     fun cancelAllPing() {
@@ -369,7 +354,6 @@ class NebulaViewModel(
                                 }
 
                                 profileStore.updateDelays(mapOf(profile.id to delayMs))
-                                notifySlowProfile(profile, delayMs, currentSettings)
                                 synchronized(this@NebulaViewModel) {
                                     completed++
                                     _testingProgress.value = completed to total
@@ -423,7 +407,6 @@ class NebulaViewModel(
                                 }
                                 _testingProfileIds.value = _testingProfileIds.value - profile.id
                                 profileStore.updateDelays(mapOf(profile.id to delayMs))
-                                notifySlowProfile(profile, delayMs, currentSettings)
                                 synchronized(this@NebulaViewModel) {
                                     completed++
                                     _testingProgress.value = completed to total
@@ -526,54 +509,7 @@ class NebulaViewModel(
     }
 
     fun deleteProfile(id: String) {
-        viewModelScope.launch {
-            profileStore.delete(id)
-            val currentSettings = settingsStore.current()
-            if (currentSettings.selectedProfileId == id) {
-                val replacement = profileStore.all().firstOrNull()?.id
-                settingsStore.update { it.copy(selectedProfileId = replacement) }
-            }
-        }
-    }
-
-    fun deleteProfiles(ids: Set<String>) {
-        if (ids.isEmpty()) return
-        viewModelScope.launch {
-            profileStore.deleteAll(ids)
-            val currentSettings = settingsStore.current()
-            if (currentSettings.selectedProfileId?.let { it in ids } == true) {
-                val replacement = profileStore.all().firstOrNull()?.id
-                settingsStore.update { it.copy(selectedProfileId = replacement) }
-            }
-            snack.emit("Removed ${ids.size} configuration(s)")
-        }
-    }
-
-    fun duplicateProfile(profile: Profile) {
-        val usedNames = profiles.value.mapTo(HashSet()) { it.displayName }
-        val baseName = "${profile.displayName} (copy)"
-        var newName = baseName
-        var suffix = 2
-        while (newName in usedNames) {
-            newName = "${profile.displayName} (copy $suffix)"
-            suffix++
-        }
-        val duplicate = profile.copy(
-            id = ShareLinkParser.newId(),
-            name = newName,
-            subscriptionId = "",
-            subscriptionUrl = "",
-            order = 0,
-            lastTestedAt = 0L,
-            lastDelayMs = 0,
-        )
-        viewModelScope.launch {
-            profileStore.upsert(duplicate)
-            settingsStore.update {
-                it.copy(selectedSubscriptionId = "", selectedProfileId = duplicate.id)
-            }
-            snack.emit("Configuration duplicated to All")
-        }
+        viewModelScope.launch { profileStore.delete(id) }
     }
 
     fun moveProfile(from: Int, to: Int) {
@@ -826,24 +762,7 @@ class NebulaViewModel(
     }
 
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
-        viewModelScope.launch {
-            val before = settingsStore.current()
-            settingsStore.update(transform)
-            val after = settingsStore.current()
-            val automationChanged = before.autoUpdateSubscriptions != after.autoUpdateSubscriptions ||
-                before.subscriptionUpdateIntervalHours != after.subscriptionUpdateIntervalHours ||
-                before.autoCheckAppUpdates != after.autoCheckAppUpdates
-            if (automationChanged) {
-                withContext(Dispatchers.IO) {
-                    AutomationScheduler.sync(application, after)
-                }
-            }
-        }
-    }
-
-    fun checkForAppUpdates() {
-        AutomationScheduler.checkForReleaseNow(application)
-        showSnack("Checking for JavidTun updates")
+        viewModelScope.launch { settingsStore.update(transform) }
     }
 
     fun selectOutbound(groupTag: String, itemTag: String) {

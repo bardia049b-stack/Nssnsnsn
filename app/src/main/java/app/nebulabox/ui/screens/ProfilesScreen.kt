@@ -5,32 +5,20 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.nebulabox.config.ConfigBuilder
 import app.nebulabox.data.Profile
@@ -45,7 +33,6 @@ import app.nebulabox.ui.components.SubscriptionGroupBar
 import app.nebulabox.ui.dialogs.ConfirmActionDialog
 import app.nebulabox.ui.dialogs.ImportConfigDialog
 import app.nebulabox.ui.dialogs.QrCodeDialog
-import app.nebulabox.ui.dialogs.QrScanDialog
 import app.nebulabox.ui.dialogs.ShareProfileDialog
 import app.nebulabox.ui.dialogs.SubscriptionsSheet
 import app.nebulabox.util.ClipboardHelper
@@ -70,43 +57,16 @@ fun ProfilesScreen(
     val activePingMs by viewModel.activeDelayMs.collectAsStateWithLifecycle()
     val exitIpInfo by viewModel.endpointLocation.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var showSearch by rememberSaveable { mutableStateOf(false) }
     var showImportDialog by rememberSaveable { mutableStateOf(false) }
-    var showQrScanner by rememberSaveable { mutableStateOf(false) }
-    var clipboardCandidate by remember { mutableStateOf<String?>(null) }
-    var lastClipboardHash by rememberSaveable { mutableStateOf("") }
     var showSubscriptionsDialog by rememberSaveable { mutableStateOf(false) }
     var showDeleteAllConfirm by rememberSaveable { mutableStateOf(false) }
     var showDeleteDupConfirm by rememberSaveable { mutableStateOf(false) }
     var showDeleteInvalidConfirm by rememberSaveable { mutableStateOf(false) }
-    var pendingDeleteProfile by remember { mutableStateOf<Profile?>(null) }
-    var pendingDeleteIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var selectedProfileIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var qrDialogProfile by remember { mutableStateOf<Profile?>(null) }
     var shareTarget by remember { mutableStateOf<Profile?>(null) }
-    val currentClipboardHash by rememberUpdatedState(lastClipboardHash)
-
-    DisposableEffect(lifecycleOwner, settings.clipboardAutoImport) {
-        val observer = LifecycleEventObserver { _, event ->
-            if (settings.clipboardAutoImport && event == Lifecycle.Event.ON_RESUME) {
-                val text = ClipboardHelper.readText(context)?.trim().orEmpty()
-                if (text.isNotBlank() && text.length <= 250_000) {
-                    val importable = ShareLinkParser.looksLikeShareLink(text) ||
-                        runCatching { ShareLinkParser.parseMany(text).isNotEmpty() }.getOrDefault(false)
-                    val hash = text.hashCode().toString()
-                    if (importable && hash != currentClipboardHash) {
-                        lastClipboardHash = hash
-                        clipboardCandidate = text
-                    }
-                }
-            }
-        }
-        if (settings.clipboardAutoImport) lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
-    }
 
     LaunchedEffect(showSubscriptionsInit) {
         if (showSubscriptionsInit) {
@@ -116,7 +76,6 @@ fun ProfilesScreen(
     }
 
     val selectedSubId = settings.selectedSubscriptionId
-    LaunchedEffect(selectedSubId, searchQuery) { selectedProfileIds = emptySet() }
 
     val filteredProfiles = remember(profiles, selectedSubId, searchQuery) {
         val bySub = if (selectedSubId.isBlank()) {
@@ -179,7 +138,6 @@ fun ProfilesScreen(
             onCancelTesting = { viewModel.cancelAllPing() },
             onImportClipboard = importClipboardAction,
             onImportUrlOrText = { showImportDialog = true },
-            onScanQr = { showQrScanner = true },
             onNewProtocol = onNewWithProtocol,
             onRestartService = { viewModel.restartTunnel() },
             onPingAllTcp = { viewModel.testAllTcpPing() },
@@ -233,65 +191,6 @@ fun ProfilesScreen(
             onSortByPing = { viewModel.sortByTestResults() },
         )
 
-        if (selectedProfileIds.isNotEmpty()) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-            ) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        Text(
-                            text = "${selectedProfileIds.size} selected",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer,
-                            modifier = Modifier.weight(1f),
-                        )
-                        TextButton(
-                            onClick = {
-                                selectedProfileIds = if (selectedProfileIds.size == filteredProfiles.size) {
-                                    emptySet()
-                                } else {
-                                    filteredProfiles.mapTo(LinkedHashSet()) { it.id }
-                                }
-                            },
-                        ) {
-                            Text(if (selectedProfileIds.size == filteredProfiles.size) "Deselect all" else "Select all")
-                        }
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End,
-                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                    ) {
-                        TextButton(onClick = { selectedProfileIds = emptySet() }) {
-                            Text("Cancel")
-                        }
-                        TextButton(
-                            onClick = {
-                                val selected = filteredProfiles.filter {
-                                    it.id in selectedProfileIds && it.protocol != Protocol.CUSTOM
-                                }
-                                val export = selected.joinToString("\n") { ShareLinkParser.toShareUri(it) }
-                                if (export.isBlank()) {
-                                    Toast.makeText(context, "Selected custom profiles cannot be exported as share links", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    ClipboardHelper.copyText(context, "JavidTun Export", export)
-                                }
-                            },
-                        ) {
-                            Text("Export")
-                        }
-                        TextButton(onClick = { pendingDeleteIds = selectedProfileIds }) {
-                            Text("Delete", color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                }
-            }
-        }
-
         Box(modifier = Modifier.weight(1f)) {
             if (filteredProfiles.isEmpty()) {
                 EmptyServerState(
@@ -321,67 +220,16 @@ fun ProfilesScreen(
                             } else {
                                 ""
                             },
-                            isMultiSelectMode = selectedProfileIds.isNotEmpty(),
-                            isChecked = profile.id in selectedProfileIds,
                             onSelect = { viewModel.selectProfile(profile) },
                             onShare = { shareTarget = profile },
                             onEdit = { onEdit(profile) },
-                            onDelete = { pendingDeleteProfile = profile },
-                            onDuplicate = { viewModel.duplicateProfile(profile) },
+                            onDelete = { viewModel.deleteProfile(profile.id) },
                             onPingSingle = { viewModel.testSingleProfileRealPing(profile) },
-                            onLongPress = {
-                                selectedProfileIds = selectedProfileIds + profile.id
-                            },
-                            onToggleSelected = {
-                                selectedProfileIds = if (profile.id in selectedProfileIds) {
-                                    selectedProfileIds - profile.id
-                                } else {
-                                    selectedProfileIds + profile.id
-                                }
-                            },
                         )
                     }
                 }
             }
         }
-    }
-
-    if (showQrScanner) {
-        QrScanDialog(
-            onDismiss = { showQrScanner = false },
-            onScanned = { value ->
-                showQrScanner = false
-                viewModel.submitImportText(value)
-            },
-        )
-    }
-
-    clipboardCandidate?.let { candidate ->
-        AlertDialog(
-            onDismissRequest = { clipboardCandidate = null },
-            title = { Text("Import from clipboard?") },
-            text = {
-                Text(
-                    candidate.take(180).let { if (candidate.length > 180) "$it…" else it },
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        clipboardCandidate = null
-                        viewModel.submitImportText(candidate)
-                    },
-                ) {
-                    Text("Import")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { clipboardCandidate = null }) {
-                    Text("Not now")
-                }
-            },
-        )
     }
 
     shareTarget?.let { profile ->
@@ -441,8 +289,8 @@ fun ProfilesScreen(
             subscriptions = subscriptions,
             isUpdating = isUpdatingSubs,
             onDismiss = { showSubscriptionsDialog = false },
-            onSaveSubscription = { id, remarks, url ->
-                viewModel.addOrUpdateSubscription(id = id, remarks = remarks, url = url)
+            onAddSubscription = { remarks, url ->
+                viewModel.addOrUpdateSubscription(id = null, remarks = remarks, url = url)
             },
             onUpdateAll = { viewModel.updateAllSubscriptions() },
             onDeleteSubscription = { id, _ ->
@@ -483,33 +331,6 @@ fun ProfilesScreen(
             onConfirm = {
                 showDeleteAllConfirm = false
                 viewModel.deleteAllProfiles()
-            },
-        )
-    }
-
-    pendingDeleteProfile?.let { profile ->
-        ConfirmActionDialog(
-            title = "Delete ‘${profile.displayName}’?",
-            message = "This configuration will be removed from this device.",
-            onDismiss = { pendingDeleteProfile = null },
-            onConfirm = {
-                pendingDeleteProfile = null
-                viewModel.deleteProfile(profile.id)
-            },
-        )
-    }
-
-    if (pendingDeleteIds.isNotEmpty()) {
-        val count = pendingDeleteIds.size
-        ConfirmActionDialog(
-            title = "Delete $count selected configurations?",
-            message = "This action cannot be undone.",
-            onDismiss = { pendingDeleteIds = emptySet() },
-            onConfirm = {
-                val ids = pendingDeleteIds
-                pendingDeleteIds = emptySet()
-                selectedProfileIds = emptySet()
-                viewModel.deleteProfiles(ids)
             },
         )
     }
