@@ -258,16 +258,8 @@ fun ProfilesScreen(
             },
         )
 
-        val quotaSubscription = remember(subscriptions, selectedSubId, settings.selectedProfileId) {
-            val direct = subscriptions.firstOrNull { it.id == selectedSubId }
-            if (direct != null) {
-                direct
-            } else {
-                val active = profiles.firstOrNull { it.id == settings.selectedProfileId }
-                val activeSubId = active?.subscriptionId.orEmpty()
-                subscriptions.firstOrNull { it.id == activeSubId }
-                    ?: subscriptions.firstOrNull { it.hasQuota || it.expireAtSeconds > 0L }
-            }
+        val quotaSubscription = remember(subscriptions, selectedSubId) {
+            subscriptions.firstOrNull { it.id == selectedSubId }
         }
 
         quotaSubscription?.let { sub ->

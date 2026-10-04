@@ -139,6 +139,14 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                     viewModel.updateSettings { it.copy(reconnectOnNetworkChange = enabled) }
                 },
             )
+            SettingsSwitchRow(
+                title = stringResource(R.string.auto_reconnect),
+                summary = stringResource(R.string.auto_reconnect_summary),
+                checked = s.autoReconnect,
+                onCheckedChange = { enabled ->
+                    viewModel.updateSettings { it.copy(autoReconnect = enabled) }
+                },
+            )
             SettingsMenuRow(
                 title = stringResource(R.string.configure_android_kill_switch),
                 subtitle = stringResource(R.string.in_system_vpn_settings_enable_always_on_vpn_and_),
@@ -388,6 +396,17 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 onCheckedChange = { enabled ->
                     viewModel.updateSettings { it.copy(clipboardAutoImport = enabled) }
                 },
+            )
+            SettingsListRow(
+                title = stringResource(R.string.auto_ping_servers),
+                options = listOf(
+                    "0" to stringResource(R.string.option_off),
+                    "5" to stringResource(R.string.every_5_minutes),
+                    "15" to stringResource(R.string.every_15_minutes),
+                    "30" to stringResource(R.string.every_30_minutes),
+                ),
+                selectedValue = s.autoPingMinutes.toString(),
+                onSelected = { v -> viewModel.updateSettings { it.copy(autoPingMinutes = v.toIntOrNull() ?: 15) } },
             )
             SettingsSwitchRow(
                 title = stringResource(R.string.slow_server_alert),

@@ -41,7 +41,7 @@ internal object RoutingConfigBuilder {
         if (includeGeoRules && settings.blockAds) {
             rules.add(
                 CoreConfig.RoutingBean.RulesBean(
-                    domain = listOf("geosite:category-ads-all"),
+                    domain = listOf("geosite:category-ads", "geosite:category-ads-ir"),
                     outboundTag = TunnelConstants.TAG_BLOCKED,
                 ),
             )

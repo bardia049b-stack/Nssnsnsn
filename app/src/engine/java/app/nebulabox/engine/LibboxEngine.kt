@@ -27,6 +27,9 @@ import java.net.InetSocketAddress
 
 private const val TAG = "XrayEngine"
 
+private const val GEO_ASSET_VERSION = 2
+private const val GEO_ASSET_VERSION_FILE = "geo_assets.version"
+
 class LibboxEngine : TunnelEngine {
 
     override val status = MutableStateFlow(TunnelStatus())
@@ -40,6 +43,9 @@ class LibboxEngine : TunnelEngine {
     private var statsJob: Job? = null
     @Volatile
     private var isInitialized = false
+
+    private var lastNoisyMessage = ""
+    private var lastNoisyAt = 0L
 
     private val callbackHandler = object : CoreCallbackHandler {
         override fun startup(): Long {
@@ -115,15 +121,18 @@ class LibboxEngine : TunnelEngine {
     }
 
     private fun copyGeoAssetsIfNeeded(context: Context, targetDir: File, force: Boolean) {
+        val versionFile = File(targetDir, GEO_ASSET_VERSION_FILE)
+        val storedVersion = runCatching { versionFile.readText().trim().toInt() }.getOrDefault(0)
+        val refresh = force || storedVersion != GEO_ASSET_VERSION
         val geoFiles = listOf(
-            Triple("geosite.dat", 5_000_000L, 12_000_000L),
-            Triple("geoip.dat", 1_000_000L, 3_000_000L),
-            Triple("geoip-only-cn-private.dat", 100_000L, 1_000_000L),
+            "geosite.dat" to 1_000_000L,
+            "geoip.dat" to 1_000_000L,
+            "geoip-only-cn-private.dat" to 50_000L,
         )
-        for ((name, minBytes, maxBytes) in geoFiles) {
+        for ((name, minBytes) in geoFiles) {
             val outFile = File(targetDir, name)
             val existing = if (outFile.exists()) outFile.length() else 0L
-            if (!force && existing >= minBytes && existing <= maxBytes) continue
+            if (!refresh && existing >= minBytes) continue
             val tmpFile = File(targetDir, "$name.tmp")
             runCatching {
                 context.assets.open(name).use { input ->
@@ -139,6 +148,9 @@ class LibboxEngine : TunnelEngine {
                 tmpFile.delete()
                 AppLogger.w(TAG, "Asset $name not copied: ${e.message}")
             }
+        }
+        if (refresh) {
+            runCatching { File(targetDir, GEO_ASSET_VERSION_FILE).writeText(GEO_ASSET_VERSION.toString()) }
         }
     }
 
@@ -244,6 +256,14 @@ class LibboxEngine : TunnelEngine {
         }
     }
 
+    private fun isRepeatedNoise(message: String): Boolean {
+        val now = System.currentTimeMillis()
+        val repeated = message == lastNoisyMessage && now - lastNoisyAt < 10_000L
+        lastNoisyMessage = message
+        lastNoisyAt = now
+        return repeated
+    }
+
     private fun startStatsPolling(profileName: String, startedAt: Long) {
         statsJob?.cancel()
         statsJob = scope.launch {
@@ -301,6 +321,16 @@ class LibboxEngine : TunnelEngine {
                     )
                 }
             }
+
+            if (isActive && !coreController.isRunning && status.value.state == TunnelState.STARTED) {
+                emitLog(1, "JavidTun Core stopped while the tunnel was up")
+                status.value = status.value.copy(
+                    state = TunnelState.STOPPED,
+                    message = "Core stopped unexpectedly",
+                    uplink = 0,
+                    downlink = 0,
+                )
+            }
         }
     }
 
@@ -339,6 +369,7 @@ class LibboxEngine : TunnelEngine {
     }
 
     private fun emitLog(level: Int, message: String) {
+        if (level <= 2 && isRepeatedNoise(message)) return
         when (level) {
             1 -> AppLogger.e("JavidTun Core", message)
             2 -> AppLogger.w("JavidTun Core", message)

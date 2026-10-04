@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -53,6 +54,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Proxy
@@ -129,6 +131,7 @@ class NebulaViewModel(
     private val pendingConnectId = MutableStateFlow<String?>(null)
 
     private var healthJob: Job? = null
+    private var autoPingJob: Job? = null
 
     private val _connectionHealth = MutableStateFlow(ConnectionHealth())
     val connectionHealth: StateFlow<ConnectionHealth> = _connectionHealth.asStateFlow()
@@ -154,8 +157,10 @@ class NebulaViewModel(
                         _activeTestError.value = null
                         fetchExitLocationQuietly()
                         verifyConnection()
+                        startAutoPing()
                     } else {
                         healthJob?.cancel()
+                        autoPingJob?.cancel()
                         _connectionHealth.value = ConnectionHealth()
                         locationJob?.cancel()
                         _checkingLocation.value = false
@@ -347,6 +352,43 @@ class NebulaViewModel(
         )
     }
 
+    private fun startAutoPing() {
+        if (autoPingJob?.isActive == true) return
+        autoPingJob = viewModelScope.launch(Dispatchers.IO) {
+            while (true) {
+                val minutes = settingsStore.current().normalized().autoPingMinutes
+                if (minutes <= 0) return@launch
+                delay(minutes * 60_000L)
+                if (status.value.state != TunnelState.STARTED) continue
+                if (_testingProgress.value != null) continue
+                pingStaleServers(minutes)
+            }
+        }
+    }
+
+    private suspend fun pingStaleServers(minutes: Int) {
+        val cutoff = System.currentTimeMillis() - minutes * 60_000L
+        val targets = profiles.value
+            .filter { it.lastTestedAt < cutoff }
+            .filter { it.server.isNotBlank() && it.serverPort > 0 }
+            .filter { it.protocol != Protocol.CUSTOM && it.protocol != Protocol.WIREGUARD }
+            .take(30)
+        if (targets.isEmpty()) return
+        val semaphore = Semaphore(6)
+        coroutineScope {
+            targets.map { profile ->
+                async {
+                    semaphore.withPermit {
+                        _testingProfileIds.value = _testingProfileIds.value + profile.id
+                        val delayMs = socketConnectTime(profile.server, profile.serverPort, 1500)
+                        _testingProfileIds.value = _testingProfileIds.value - profile.id
+                        profileStore.updateDelays(mapOf(profile.id to delayMs))
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
     fun cancelAllPing() {
         batchTestJob?.cancel()
         batchTestJob = null
@@ -531,9 +573,13 @@ class NebulaViewModel(
 
     fun selectProfile(profile: Profile) {
         viewModelScope.launch {
-            val wasConnected = status.value.state == TunnelState.STARTED
+            val state = status.value.state
+            val running = state == TunnelState.STARTED || state == TunnelState.STARTING
             settingsStore.update { it.copy(selectedProfileId = profile.id) }
-            if (wasConnected) {
+            if (running) {
+                snack.emit(application.getString(R.string.switching_server, profile.displayName))
+                Actions.disconnect(application)
+                withTimeoutOrNull(6000) { status.first { it.state == TunnelState.STOPPED } }
                 Actions.connect(application, profile.id)
             }
         }

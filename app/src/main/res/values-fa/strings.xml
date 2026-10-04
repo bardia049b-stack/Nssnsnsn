@@ -399,4 +399,12 @@
     <string name="subscription_update_partial">%1$d گروه به‌روز شد، %2$d سرور؛ %3$d ناموفق</string>
     <string name="subscription_update_ok">%1$d گروه و %2$d سرور به‌روز شد</string>
     <string name="subscription_update_none">هیچ اشتراکی به‌روز نشد. سرورهای قبلی نگه داشته شدند.</string>
+    <string name="auto_reconnect">اتصال مجدد خودکار</string>
+    <string name="auto_reconnect_summary">اگر تانل قطع شد یا شبکه عوض شد، خودش دوباره وصل شود</string>
+    <string name="auto_ping_servers">پینگ خودکار سرورها</string>
+    <string name="every_5_minutes">هر ۵ دقیقه</string>
+    <string name="every_15_minutes">هر ۱۵ دقیقه</string>
+    <string name="every_30_minutes">هر ۳۰ دقیقه</string>
+    <string name="option_off">خاموش</string>
+    <string name="switching_server">در حال تغییر به %1$s…</string>
 </resources>

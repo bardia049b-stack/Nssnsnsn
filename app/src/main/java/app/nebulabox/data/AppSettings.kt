@@ -46,13 +46,15 @@ data class AppSettings(
     val tcpMuxPadding: Boolean = false,
     val tcpFastOpen: Boolean = false,
 
-    val delayTestUrl: String = "https://www.gstatic.com/generate_204",
+    val delayTestUrl: String = "https://cp.cloudflare.com/generate_204",
 
     val perAppEnabled: Boolean = false,
     val perAppMode: String = "exclude",
     val perAppPackages: Set<String> = emptySet(),
 
     val autoConnect: Boolean = false,
+    val autoReconnect: Boolean = true,
+    val autoPingMinutes: Int = 15,
     val alwaysOn: Boolean = false,
     val meteredNetwork: Boolean = false,
     val showSpeedInNotification: Boolean = true,
@@ -86,22 +88,32 @@ data class AppSettings(
             remoteDns
         }
         val validDirectDns = if (directDns == "1.1.1.1" || directDns.isBlank()) "223.5.5.5" else directDns
-        if (settingsVersion >= 4 &&
+        val validDelayUrl = if (delayTestUrl.isBlank() || delayTestUrl.contains("gstatic.com")) {
+            "https://cp.cloudflare.com/generate_204"
+        } else {
+            delayTestUrl
+        }
+        val validPingMinutes = if (autoPingMinutes in listOf(0, 5, 15, 30)) autoPingMinutes else 15
+        if (settingsVersion >= 5 &&
             mtu == validMtu &&
             socksPort == validPort &&
             logLevel == validLogLevel &&
             remoteDns == validRemoteDns &&
-            directDns == validDirectDns
+            directDns == validDirectDns &&
+            delayTestUrl == validDelayUrl &&
+            autoPingMinutes == validPingMinutes
         ) {
             return this
         }
         return copy(
-            settingsVersion = 4,
+            settingsVersion = 5,
             mtu = validMtu,
             socksPort = validPort,
             logLevel = validLogLevel,
             remoteDns = validRemoteDns,
             directDns = validDirectDns,
+            delayTestUrl = validDelayUrl,
+            autoPingMinutes = validPingMinutes,
             localDnsEnabled = false,
             tcpFastOpen = false,
             tcpMux = false,

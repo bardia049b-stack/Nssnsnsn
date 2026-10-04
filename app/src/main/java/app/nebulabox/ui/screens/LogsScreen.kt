@@ -240,32 +240,34 @@ private fun LiveLogsTab(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 2.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             listOf("ALL", "INFO", "WARN", "ERROR").forEach { lvl ->
                 FilterChip(
                     selected = levelFilter == lvl,
                     onClick = { onLevelFilterChange(lvl) },
-                    label = { Text(lvl, style = MaterialTheme.typography.labelMedium) },
-                    shape = RoundedCornerShape(10.dp),
+                    label = { Text(lvl, style = MaterialTheme.typography.labelSmall, maxLines = 1) },
+                    shape = RoundedCornerShape(9.dp),
+                    modifier = Modifier.height(30.dp),
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
                         selectedLabelColor = MaterialTheme.colorScheme.primary,
                     ),
                 )
             }
-            Spacer(Modifier.width(8.dp))
-            OutlinedButton(
+            Spacer(Modifier.weight(1f))
+            IconButton(
                 onClick = onCopyAll,
-                shape = RoundedCornerShape(10.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.size(34.dp),
             ) {
-                Icon(Icons.Outlined.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.copy_all), maxLines = 1, softWrap = false)
+                Icon(
+                    imageVector = Icons.Outlined.ContentCopy,
+                    contentDescription = stringResource(R.string.copy_all),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(17.dp),
+                )
             }
         }
 

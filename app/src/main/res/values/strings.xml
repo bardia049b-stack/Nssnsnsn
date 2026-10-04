@@ -399,4 +399,12 @@
     <string name="subscription_update_partial">Updated %1$d group(s), %2$d server(s); %3$d failed</string>
     <string name="subscription_update_ok">Updated %1$d group(s) and %2$d server(s)</string>
     <string name="subscription_update_none">No subscription could be updated. Existing servers were kept.</string>
+    <string name="auto_reconnect">Auto reconnect</string>
+    <string name="auto_reconnect_summary">Bring the tunnel back on its own after a drop, a network change or a restart of the app</string>
+    <string name="auto_ping_servers">Auto ping servers</string>
+    <string name="every_5_minutes">Every 5 minutes</string>
+    <string name="every_15_minutes">Every 15 minutes</string>
+    <string name="every_30_minutes">Every 30 minutes</string>
+    <string name="option_off">Off</string>
+    <string name="switching_server">Switching to %1$s…</string>
 </resources>

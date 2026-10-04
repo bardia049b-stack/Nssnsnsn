@@ -31,6 +31,7 @@ import app.nebulabox.util.Formatters
 import com.v2ray.ang.service.TProxyService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -49,6 +50,9 @@ class TunnelVpnService : VpnService(), TunProvider {
     private var connectJob: Job? = null
     private var activeProfileName = ""
     private val isStopping = AtomicBoolean(false)
+    private var reconnectJob: Job? = null
+    private var watchdogJob: Job? = null
+    private var reconnectAttempts = 0
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     override fun onCreate() {
@@ -64,16 +68,72 @@ class TunnelVpnService : VpnService(), TunProvider {
         when (intent?.action) {
             Actions.ACTION_CONNECT -> {
                 isStopping.set(false)
+                reconnectAttempts = 0
                 val profileId = intent.getStringExtra(Actions.EXTRA_PROFILE_ID)
+                desiredProfileId = profileId
+                lastProfileId = profileId ?: lastProfileId
                 connectJob?.cancel()
                 connectJob = scope.launch { connect(profileId) }
             }
 
             Actions.ACTION_DISCONNECT -> {
+                desiredProfileId = null
+                reconnectAttempts = 0
                 requestStopTunnel()
+            }
+
+            null -> {
+                val wanted = lastProfileId
+                if (wanted != null) {
+                    AppLogger.i(TAG, "Service restarted by the system, reconnecting to $wanted")
+                    isStopping.set(false)
+                    desiredProfileId = wanted
+                    connectJob?.cancel()
+                    connectJob = scope.launch {
+                        delay(1500)
+                        val settings = runCatching { settingsStore.current().normalized() }.getOrNull()
+                        if (settings?.autoReconnect == true) {
+                            connect(wanted)
+                        } else {
+                            requestStopTunnel()
+                        }
+                    }
+                }
             }
         }
         return START_STICKY
+    }
+
+    private fun startTunnelWatchdog(engine: app.nebulabox.engine.TunnelEngine) {
+        watchdogJob?.cancel()
+        watchdogJob = scope.launch {
+            engine.status.collect { st ->
+                if (st.state == TunnelState.STOPPED && desiredProfileId != null && !isStopping.get()) {
+                    scheduleReconnect(st.message.ifBlank { "core stopped" })
+                }
+            }
+        }
+    }
+
+    private fun scheduleReconnect(reason: String) {
+        if (reconnectJob?.isActive == true) return
+        val wanted = desiredProfileId ?: lastProfileId ?: return
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            AppLogger.w(TAG, "Giving up after $reconnectAttempts reconnect attempts ($reason)")
+            return
+        }
+        reconnectAttempts++
+        val waitMs = (3000L shl (reconnectAttempts - 1)).coerceAtMost(60_000L)
+        AppLogger.i(TAG, "Reconnect attempt $reconnectAttempts in ${waitMs / 1000}s ($reason)")
+        reconnectJob = scope.launch {
+            delay(waitMs)
+            val settings = runCatching { settingsStore.current().normalized() }.getOrNull()
+            if (settings?.autoReconnect != true) return@launch
+            if (isStopping.get()) return@launch
+            isStopping.set(false)
+            connectJob?.cancel()
+            connectJob = scope.launch { connect(wanted) }
+        }
     }
 
     override fun onBind(intent: Intent): IBinder? = super.onBind(intent)
@@ -160,13 +220,15 @@ class TunnelVpnService : VpnService(), TunProvider {
                 startSpeedNotificationJob(engine)
             }
 
+            reconnectAttempts = 0
+            startTunnelWatchdog(engine)
             AppLogger.i(
                 TAG,
                 "Tunnel connected: $activeProfileName (mode=${if (settings.useHevTun) "hev-socks5-tunnel" else "xray-tun"})",
             )
         } catch (e: Throwable) {
             AppLogger.e(TAG, "Tunnel start failed: ${e.message}", e)
-            stopWithMessage(e.message ?: getString(R.string.error_start))
+            stopWithMessage(e.message ?: getString(R.string.error_start), retryable = true)
         }
     }
 
@@ -245,7 +307,7 @@ class TunnelVpnService : VpnService(), TunProvider {
             true
         } catch (e: Exception) {
             AppLogger.e(TAG, "builder.establish() failed", e)
-            stopWithMessage(getString(R.string.error_tun) + ": " + e.message)
+            stopWithMessage(getString(R.string.error_tun) + ": " + e.message, retryable = true)
             false
         }
     }
@@ -269,6 +331,10 @@ class TunnelVpnService : VpnService(), TunProvider {
 
             override fun onLost(network: Network) {
                 runCatching { setUnderlyingNetworks(null) }
+                val engine = Engines.active.value
+                if (!isStopping.get() && engine?.status?.value?.state != TunnelState.STARTED) {
+                    scheduleReconnect("network lost")
+                }
             }
         }
         runCatching {
@@ -342,23 +408,36 @@ class TunnelVpnService : VpnService(), TunProvider {
         }
     }
 
-    private fun stopWithMessage(message: String) {
-        AppLogger.e(TAG, "tunnel stopped with error: $message")
-        unregisterNetworkMonitor()
+    private fun stopWithMessage(message: String, retryable: Boolean = false) {
+        val willRetry = retryable && desiredProfileId != null && reconnectAttempts < MAX_RECONNECT_ATTEMPTS
+        AppLogger.e(TAG, "tunnel stopped with error: $message (retry=$willRetry)")
+
         runCatching { TProxyService.stop() }
         runCatching { Engines.active.value?.stop() }
-        val pfd = interfaceFd
-        interfaceFd = null
-        runCatching { pfd?.close() }
 
         val engine = Engines.active.value
         if (engine != null) {
             engine.status.value = TunnelStatus(
-                state = TunnelState.STOPPED,
+                state = if (willRetry) TunnelState.STARTING else TunnelState.STOPPED,
                 profileName = activeProfileName,
                 message = message,
             )
         }
+
+        if (willRetry) {
+            scope.launch(Dispatchers.Main) {
+                runCatching {
+                    sendBroadcast(Intent(Actions.ACTION_STATE_CHANGED).setPackage(packageName))
+                }
+            }
+            scheduleReconnect(message)
+            return
+        }
+
+        unregisterNetworkMonitor()
+        val pfd = interfaceFd
+        interfaceFd = null
+        runCatching { pfd?.close() }
         releaseWakeLock()
         isServiceAlive = false
         scope.launch(Dispatchers.Main) {
@@ -440,6 +519,13 @@ class TunnelVpnService : VpnService(), TunProvider {
     companion object {
         private const val TAG = "JavidTun"
         private const val NOTIFICATION_ID = 1
+        private const val MAX_RECONNECT_ATTEMPTS = 6
+
+        @Volatile
+        private var desiredProfileId: String? = null
+
+        @Volatile
+        private var lastProfileId: String? = null
 
         @Volatile
         var isServiceAlive: Boolean = false
