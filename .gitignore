@@ -8,3 +8,5 @@ keystore/
 *.keystore
 app/libs/libbox.aar
 app/libs/libv2ray.aar
+
+.kotlin/

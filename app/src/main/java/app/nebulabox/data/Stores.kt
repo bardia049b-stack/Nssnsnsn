@@ -118,6 +118,8 @@ class ProfileStore(private val context: Context) {
 
     suspend fun delete(id: String) = write { list -> list.filterNot { it.id == id } }
 
+    suspend fun deleteAll(ids: Set<String>) = write { list -> list.filterNot { it.id in ids } }
+
     suspend fun clear() = write { emptyList() }
 
     suspend fun clearGroup(subId: String) = write { list ->

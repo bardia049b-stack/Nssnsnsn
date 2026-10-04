@@ -19,10 +19,24 @@ object ShareLinkParser {
         "wireguard://", "wg://", "ssh://", "naive+https://",
     )
 
-    private val SCHEME_SPLIT_REGEX = Regex(
-        "(?=(?:vless|vmess|trojan|ss|socks5?|https?|hysteria2|hy2|tuic|wireguard|wg|ssh|naive\\+https)://)",
+    private val SCHEME_ANCHOR_REGEX = Regex(
+        "(?<![A-Za-z0-9+.\\-/_=&?%:])(?:naive\\+https|wireguard|hysteria2|vless|vmess|trojan|socks5|socks|https|http|tuic|hy2|ssh|wg|ss)://",
         RegexOption.IGNORE_CASE,
     )
+
+    private fun linkCandidates(line: String): List<String> {
+        val clean = line.trim()
+        if (clean.isEmpty()) return emptyList()
+
+        val anchors = SCHEME_ANCHOR_REGEX.findAll(clean).map { it.range.first }.toList()
+        if (anchors.isEmpty()) return listOf(clean)
+        if (anchors.size == 1 && anchors.first() == 0) return listOf(clean)
+
+        return anchors.mapIndexed { index, start ->
+            val end = anchors.getOrNull(index + 1) ?: clean.length
+            clean.substring(start, end).trim()
+        }.filter { it.isNotEmpty() }
+    }
 
     fun looksLikeShareLink(text: String): Boolean {
         val t = text.trim()
@@ -48,9 +62,7 @@ object ShareLinkParser {
         val rawLines = trimmed.lines().map { it.trim() }.filter { it.isNotEmpty() }
         for (line in rawLines) {
             if (line.startsWith("#") || line.startsWith("//")) continue
-            val chunks = SCHEME_SPLIT_REGEX.split(line).map { it.trim() }.filter { it.isNotEmpty() }
-            val candidates = if (chunks.isNotEmpty()) chunks else listOf(line)
-            for (candidate in candidates) {
+            for (candidate in linkCandidates(line)) {
                 runCatching { out.addAll(parse(candidate)) }
             }
         }
@@ -333,6 +345,8 @@ object ShareLinkParser {
             mldsa65Verify = params["pqv"] ?: "",
         )
 
+        if (host.isBlank() || uuid.isBlank()) throw ParseException("invalid vless link")
+
         return Profile(
             id = newId(),
             name = (params["remarks"] ?: decode(fragment(link))).ifBlank { "$host:$port" },
@@ -508,13 +522,16 @@ object ShareLinkParser {
             val rawUser = authority.substringBeforeLast("@")
             val hostPart = authority.substringAfterLast("@")
             val (host, port) = splitHostPort(hostPart)
+            if (host.isBlank()) throw ParseException("shadowsocks link without host")
             val decodedUser = if (rawUser.contains(":")) {
                 decode(rawUser)
             } else {
                 decodeBase64ToString(rawUser) ?: decode(rawUser)
             }
-            val method = decodedUser.substringBefore(":")
-            val password = decodedUser.substringAfter(":", "")
+            if (!decodedUser.contains(":")) throw ParseException("shadowsocks link without cipher")
+            val method = decodedUser.substringBefore(":").trim()
+            val password = decodedUser.substringAfter(":", "").trim()
+            if (method.isBlank() || password.isBlank()) throw ParseException("shadowsocks link without password")
             return listOf(
                 Profile(
                     id = newId(),
@@ -534,6 +551,11 @@ object ShareLinkParser {
             val cred = whole.substringBeforeLast("@")
             val hostPart = whole.substringAfterLast("@")
             val (host, port) = splitHostPort(hostPart)
+            val method = cred.substringBefore(":").trim()
+            val password = cred.substringAfter(":", "").trim()
+            if (host.isBlank() || !cred.contains(":") || method.isBlank() || password.isBlank()) {
+                throw ParseException("invalid ss link")
+            }
             return listOf(
                 Profile(
                     id = newId(),
@@ -541,8 +563,8 @@ object ShareLinkParser {
                     protocol = Protocol.SHADOWSOCKS,
                     server = host,
                     serverPort = port,
-                    method = cred.substringBefore(":"),
-                    password = cred.substringAfter(":"),
+                    method = method,
+                    password = password,
                 ),
             )
         }

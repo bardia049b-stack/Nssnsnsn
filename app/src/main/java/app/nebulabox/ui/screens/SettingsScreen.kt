@@ -1,5 +1,7 @@
 package app.nebulabox.ui.screens
 
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -39,6 +41,7 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
     var dnsExpanded by rememberSaveable { mutableStateOf(true) }
     var fragmentExpanded by rememberSaveable { mutableStateOf(true) }
     var muxExpanded by rememberSaveable { mutableStateOf(false) }
+    var automationExpanded by rememberSaveable { mutableStateOf(true) }
     var uiExpanded by rememberSaveable { mutableStateOf(true) }
 
     Column(
@@ -114,10 +117,33 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(allowLan = v) } },
             )
             SettingsSwitchRow(
+                title = "Auto-connect after reboot",
+                summary = "Reconnect to the selected server when Android finishes starting",
+                checked = s.autoConnect,
+                onCheckedChange = { enabled ->
+                    viewModel.updateSettings { it.copy(autoConnect = enabled) }
+                },
+            )
+            SettingsSwitchRow(
                 title = "Live speed in notification",
                 summary = "Show upload and download speed in status bar",
                 checked = s.showSpeedInNotification,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(showSpeedInNotification = v) } },
+            )
+            SettingsSwitchRow(
+                title = "Reconnect after network changes",
+                summary = "Restart the selected tunnel after Wi-Fi or mobile network handoff",
+                checked = s.reconnectOnNetworkChange,
+                onCheckedChange = { enabled ->
+                    viewModel.updateSettings { it.copy(reconnectOnNetworkChange = enabled) }
+                },
+            )
+            SettingsMenuRow(
+                title = "Configure Android kill switch",
+                subtitle = "In system VPN settings, enable Always-on VPN and Block connections without VPN",
+                onClick = {
+                    runCatching { context.startActivity(Intent(Settings.ACTION_VPN_SETTINGS)) }
+                },
             )
         }
 
@@ -288,6 +314,103 @@ fun SettingsScreen(viewModel: NebulaViewModel) {
                 checked = s.tcpFastOpen,
                 onCheckedChange = { v -> viewModel.updateSettings { it.copy(tcpFastOpen = v) } },
             )
+        }
+
+        SettingsSectionCard(
+            title = "Automation & Notifications",
+            expanded = automationExpanded,
+            onExpandedChange = { automationExpanded = it },
+        ) {
+            SettingsSwitchRow(
+                title = "Auto-update subscriptions",
+                summary = if (s.autoUpdateSubscriptions) {
+                    "Enabled · every ${s.subscriptionUpdateIntervalHours} hours, with a notification"
+                } else {
+                    "Off · subscription groups update only when you ask"
+                },
+                checked = s.autoUpdateSubscriptions,
+                onCheckedChange = { enabled ->
+                    viewModel.updateSettings { it.copy(autoUpdateSubscriptions = enabled) }
+                },
+            )
+            if (s.autoUpdateSubscriptions) {
+                SettingsListRow(
+                    title = "Subscription update interval",
+                    options = listOf(
+                        "6" to "Every 6 hours",
+                        "12" to "Every 12 hours",
+                        "24" to "Every 24 hours",
+                    ),
+                    selectedValue = s.subscriptionUpdateIntervalHours.toString(),
+                    onSelected = { hours ->
+                        viewModel.updateSettings { it.copy(subscriptionUpdateIntervalHours = hours.toIntOrNull() ?: 12) }
+                    },
+                )
+                SettingsSwitchRow(
+                    title = "Notify after subscription update",
+                    summary = "Show updated groups and imported server counts",
+                    checked = s.notifySubscriptionUpdates,
+                    onCheckedChange = { enabled ->
+                        viewModel.updateSettings { it.copy(notifySubscriptionUpdates = enabled) }
+                    },
+                )
+            }
+            SettingsSwitchRow(
+                title = "Check for new app versions",
+                summary = if (s.autoCheckAppUpdates) {
+                    "Check GitHub Releases daily and alert when a newer version is published"
+                } else {
+                    "Off · use Check for updates to run a manual check"
+                },
+                checked = s.autoCheckAppUpdates,
+                onCheckedChange = { enabled ->
+                    viewModel.updateSettings { it.copy(autoCheckAppUpdates = enabled) }
+                },
+            )
+            SettingsSwitchRow(
+                title = "Notify about new versions",
+                summary = "Show one alert for each new GitHub release",
+                checked = s.notifyAppUpdates,
+                onCheckedChange = { enabled ->
+                    viewModel.updateSettings { it.copy(notifyAppUpdates = enabled) }
+                },
+            )
+            SettingsMenuRow(
+                title = "Check for updates now",
+                subtitle = "Check the latest JavidTun release on GitHub",
+                onClick = { viewModel.checkForAppUpdates() },
+            )
+            SettingsSwitchRow(
+                title = "Clipboard import prompt",
+                summary = "Ask before importing a copied link or config when the app opens",
+                checked = s.clipboardAutoImport,
+                onCheckedChange = { enabled ->
+                    viewModel.updateSettings { it.copy(clipboardAutoImport = enabled) }
+                },
+            )
+            SettingsSwitchRow(
+                title = "Slow server alert",
+                summary = "Notify after a latency test exceeds the chosen limit",
+                checked = s.notifySlowServers,
+                onCheckedChange = { enabled ->
+                    viewModel.updateSettings { it.copy(notifySlowServers = enabled) }
+                },
+            )
+            if (s.notifySlowServers) {
+                SettingsListRow(
+                    title = "Slow server threshold",
+                    options = listOf(
+                        "300" to "300 ms",
+                        "500" to "500 ms",
+                        "800" to "800 ms",
+                        "1200" to "1200 ms",
+                    ),
+                    selectedValue = s.slowServerThresholdMs.toString(),
+                    onSelected = { threshold ->
+                        viewModel.updateSettings { it.copy(slowServerThresholdMs = threshold.toIntOrNull() ?: 500) }
+                    },
+                )
+            }
         }
 
         SettingsSectionCard(

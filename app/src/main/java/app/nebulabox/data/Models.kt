@@ -43,7 +43,26 @@ enum class Protocol(val wire: String) {
     @SerialName("direct")
     DIRECT("direct");
 
+    val displayName: String
+        get() = when (this) {
+            VLESS -> "VLESS"
+            VMESS -> "VMess"
+            TROJAN -> "Trojan"
+            SHADOWSOCKS -> "Shadowsocks"
+            SOCKS -> "SOCKS"
+            HTTP -> "HTTP"
+            HYSTERIA2 -> "Hysteria2"
+            TUIC -> "TUIC"
+            WIREGUARD -> "WireGuard"
+            SSH -> "SSH"
+            NAIVE -> "Naive"
+            CUSTOM -> "Custom JSON"
+            DIRECT -> "Direct"
+        }
+
     companion object {
+        val STREAM_PROTOCOLS = setOf(VLESS, VMESS, TROJAN)
+
         fun fromWire(value: String): Protocol? = entries.firstOrNull {
             it.wire.equals(value, ignoreCase = true) ||
                 (value.equals("hysteria", ignoreCase = true) && it == HYSTERIA2)
@@ -163,14 +182,16 @@ data class Profile(
 
     val typeDescription: String
         get() {
-            if (protocol == Protocol.CUSTOM) return "CUSTOM"
+            if (protocol == Protocol.CUSTOM) return "Custom JSON"
             return buildList {
-                add(protocol.name)
-                val net = transport.type.trim()
-                if (net.isNotEmpty() && protocol != Protocol.WIREGUARD) add(net)
-                when {
-                    tls.reality -> add("reality")
-                    tls.enabled -> add("tls")
+                add(protocol.displayName)
+                if (protocol in Protocol.STREAM_PROTOCOLS) {
+                    val net = transport.type.trim().lowercase()
+                    if (net.isNotEmpty()) add(if (net == "httpupgrade") "httpupgrade" else net)
+                    when {
+                        tls.reality -> add("reality")
+                        tls.enabled -> add("tls")
+                    }
                 }
             }.joinToString(" / ")
         }
@@ -184,7 +205,11 @@ data class Profile(
         }
 
     val testDelayString: String
-        get() = if (lastDelayMs == 0) "" else "$lastDelayMs ms"
+        get() = when {
+            lastDelayMs > 0 -> "$lastDelayMs ms"
+            lastDelayMs < 0 || lastTestedAt > 0L -> "timeout"
+            else -> ""
+        }
 
     fun duplicateKey(): String {
         if (protocol == Protocol.CUSTOM) {

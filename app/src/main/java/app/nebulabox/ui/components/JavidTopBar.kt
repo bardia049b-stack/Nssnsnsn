@@ -66,8 +66,12 @@ fun JavidTopBar(
     onCancelTesting: () -> Unit,
     onImportClipboard: () -> Unit,
     onImportUrlOrText: () -> Unit,
+    onScanQr: () -> Unit,
+    onImportQrImage: () -> Unit,
     onNewProtocol: (Protocol) -> Unit,
     onRestartService: () -> Unit,
+    onSpeedTest: () -> Unit,
+    onOpenLeakTest: () -> Unit,
     onPingAllTcp: () -> Unit,
     onPingAllReal: () -> Unit,
     onSortByTestResults: () -> Unit,
@@ -204,6 +208,20 @@ fun JavidTopBar(
                                 onImportUrlOrText()
                             },
                         )
+                        DropdownMenuItem(
+                            text = { Text("Scan QR code") },
+                            onClick = {
+                                showImportMenu = false
+                                onScanQr()
+                            },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Import QR from image") },
+                            onClick = {
+                                showImportMenu = false
+                                onImportQrImage()
+                            },
+                        )
                         AppDivider()
                         DropdownMenuItem(
                             text = { Text("New VLESS") },
@@ -271,6 +289,15 @@ fun JavidTopBar(
                         DropdownMenuItem(
                             text = { Text("Restart tunnel") },
                             onClick = { showMoreMenu = false; onRestartService() },
+                        )
+                        AppDivider()
+                        DropdownMenuItem(
+                            text = { Text("Speed test & exit IP") },
+                            onClick = { showMoreMenu = false; onSpeedTest() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text("WebRTC leak test") },
+                            onClick = { showMoreMenu = false; onOpenLeakTest() },
                         )
                         AppDivider()
                         DropdownMenuItem(
