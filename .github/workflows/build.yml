@@ -123,6 +123,8 @@ jobs:
           set -eo pipefail
           [ "${{ github.event.inputs.build_type || 'release' }}" = "release" ] || exit 0
           BT=$(dirname "$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner | sort | tail -1)")
+          CODES=""
+          if [ -x "$BT/aapt2" ]; then CODES="$BT/aapt2 dump badging"; fi
           for apk in out/*.apk; do
             echo "--- $(basename "$apk")"
             "$BT/apksigner" verify --print-certs "$apk" | grep -E "Verified using|Signer #1 certificate DN" || true
@@ -138,8 +140,10 @@ jobs:
               *) echo "::error::cannot tell the architecture of $name"; status=1; continue ;;
             esac
             entries=$(unzip -Z1 "$apk" | grep '^lib/' || true)
-            code=$("$BT/aapt2" dump badging "$apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
-            echo "$name: $(stat -c%s "$apk") bytes, versionCode $code"
+            echo "$name: $(stat -c%s "$apk") bytes"
+            if [ -n "$CODES" ]; then
+              echo "  versionCode $($CODES "$apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
+            fi
             echo "$entries" | sed 's/^/  /'
             if ! echo "$entries" | grep -qx "lib/$abi/libgojni.so"; then
               echo "::error::$name does not carry lib/$abi/libgojni.so"
@@ -151,11 +155,17 @@ jobs:
               status=1
             fi
           done
-          codes=$(for apk in out/*.apk; do "$BT/aapt2" dump badging "$apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p"; done | sort -u | wc -l)
           total=$(ls out/*.apk | wc -l)
-          if [ "$codes" -ne "$total" ]; then
-            echo "::error::the APKs do not all carry a version code of their own"
+          if [ "$total" -ne 4 ]; then
+            echo "::error::expected four architectures, found $total"
             status=1
+          fi
+          if [ -n "$CODES" ]; then
+            codes=$(for apk in out/*.apk; do $CODES "$apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p"; done | sort -u | wc -l)
+            if [ "$codes" -ne "$total" ]; then
+              echo "::error::the APKs do not all carry a version code of their own"
+              status=1
+            fi
           fi
           exit $status
 
