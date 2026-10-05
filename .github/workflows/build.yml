@@ -119,8 +119,10 @@ jobs:
           mkdir -p out
           for apk in app/build/outputs/apk/fdroid/release/*.apk; do
             [ -f "$apk" ] || continue
-            abi=$(basename "$apk" | grep -oE 'arm64-v8a|armeabi-v7a|x86_64|x86' | head -1)
-            cp "$apk" "out/JavidTun-${VERSION}-${CODE}-${abi:-universal}.apk"
+            arch=$(basename "$apk" | grep -oE 'arm64-v8a|armeabi-v7a|x86_64|x86' | head -1)
+            if [ -z "$arch" ]; then arch=universal; fi
+            cp "$apk" "out/JavidTun-${VERSION}-${CODE}-${arch}.apk"
+            echo "app/build/outputs/apk/fdroid/release/$(basename "$apk") becomes JavidTun-${VERSION}-${CODE}-${arch}.apk"
           done
           ls -l out
 
@@ -128,7 +130,13 @@ jobs:
           codes=""
           for apk in out/*.apk; do
             name=$(basename "$apk")
-            arch=$(echo "$name" | sed -E "s/^JavidTun-.*-${CODE}-(.*)\.apk$/\1/")
+            arch=$(echo "$name" | grep -oE 'arm64-v8a|armeabi-v7a|x86_64|x86' | head -1)
+            if [ -z "$arch" ]; then
+              case "$name" in
+                *-universal.apk) arch=universal ;;
+                *) echo "::error::$name is named after no architecture this workflow knows"; status=1; continue ;;
+              esac
+            fi
             entries=$(unzip -Z1 "$apk" | grep '^lib/' || true)
             echo "--- $name ($(stat -c%s "$apk") bytes)"
             "$BT/apksigner" verify --print-certs "$apk" | grep -E "Verified using|Signer #1 certificate SHA-256" | sed 's/^/    /' || true
