@@ -78,6 +78,6 @@ object ReleaseChecker {
         return match.groupValues[4].toIntOrNull() ?: 0
     }
 
-    private const val RELEASES_API = "https://api.github.com/repos/bardia049b-stack/Nssnsnsn/releases/latest"
-    private val VERSION_PATTERN = Regex("^[vV]?(\\d+)\\.(\\d+)\\.(\\d+)(?:[-+](\\d+))?")
+    private const val RELEASES_API = "https://api.github.com/repos/r4chan842/JavidTun/releases/latest"
+    private val VERSION_PATTERN = Regex("(\\d+)\\.(\\d+)\\.(\\d+)(?:[-+](\\d+))?")
 }

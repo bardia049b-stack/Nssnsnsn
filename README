@@ -1,0 +1,104 @@
+تقدیم به مردم شریف ایران
+
+JavidTun
+========
+
+JavidTun is an Android client for the Xray core. It keeps the servers you add
+in one list, shows how much of the subscription is left, and sends the traffic
+of the phone through the server you pick. It installs under the name
+app.nebulabox, and inside the code the app calls itself NebulaBox.
+
+What is in it
+-------------
+
+  - servers from a share link, the clipboard, a QR image, the camera or a
+    subscription address
+  - one list per subscription, with a quota and expiry bar that comes from the
+    subscription itself
+  - routing with per app rules, and fragment, mux, dns, sniffing and the rest
+    of the technical side under Advanced in the settings
+  - an honest connection state: the button only turns green once traffic has
+    really gone through, and a subscription that has run out says so instead of
+    pretending that everything is fine
+  - an update checker that reads the releases of this repository and offers the
+    file that belongs to the architecture of the phone
+
+Downloading
+-----------
+
+Take what you need from the newest release. Every file is named
+
+    JavidTun-<version>-<build>-<architecture>.apk
+
+with these architectures:
+
+    arm64-v8a      most phones of the last years
+    armeabi-v7a    older 32 bit phones
+    x86_64         emulators and tablets
+    x86            old emulators
+    universal      all four cores in one file
+
+If you are not sure which one your phone wants, take the universal file: it
+installs anywhere and is only a little bigger than the rest.
+
+The release also carries a detached signature for every file, the public key
+that checks them and a list of hashes:
+
+    gpg --import JavidTun-public-key.asc
+    gpg --verify JavidTun-....apk.sig JavidTun-....apk
+    sha256sum -c SHA256SUMS.txt
+
+Building it yourself
+--------------------
+
+    git clone https://github.com/r4chan842/JavidTun
+    cd JavidTun
+    ./gradlew assembleFdroidRelease
+
+You need a JDK 17 and an Android SDK with the build tools of API 35. The result
+lands in app/build/outputs/apk/fdroid/release, one file per architecture with a
+universal one next to them; without a keystore the files come out unsigned.
+
+The Xray core is not built here. The build takes app/libs/libv2ray.aar from the
+AndroidLibXrayLite project at a pinned tag and throws it away when its SHA-256
+does not match; the tag and the hash sit in .github/workflows/build.yml.
+
+The tunnel itself runs on hev-socks5-tunnel, which carries the packets of the
+VPN interface to the local port of the core. The copy in app/src/main/jniLibs
+is a build of that project for 64 bit phones; on the other architectures the
+app uses the tun of the core instead.
+
+Releases
+--------
+
+A release is started by hand from the Actions tab, with the publish choice set
+to yes. Nothing is published on a push, so a release never happens by accident.
+
+The version is written by hand in gradle.properties:
+
+    APP_VERSION_NAME=2.1.0
+    APP_VERSION_CODE=43
+
+The second number is the one the phone looks at. Each architecture gets a
+number of its own out of it, so the files of one release can never look like
+the same app to the installer:
+
+    armeabi-v7a    APP_VERSION_CODE * 10 + 1
+    arm64-v8a      APP_VERSION_CODE * 10 + 2
+    x86            APP_VERSION_CODE * 10 + 3
+    x86_64         APP_VERSION_CODE * 10 + 4
+    universal      APP_VERSION_CODE * 10 + 5
+
+Bump APP_VERSION_CODE before every release, otherwise phones will not see it.
+
+Bugs
+----
+
+Open an issue here. It helps to say which phone, which Android version and
+which of the files you installed.
+
+Licence
+-------
+
+GPL-3.0, the text is in LICENSE. The parts written by other people keep their
+own licences, and THIRD_PARTY_LICENSES.md lists them.

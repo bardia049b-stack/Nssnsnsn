@@ -44,7 +44,7 @@ android {
             isEnable = true
             reset()
             include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-            isUniversalApk = false
+            isUniversalApk = true
         }
     }
 
@@ -106,9 +106,14 @@ android {
                 val abi = output.filters
                     .find { it.filterType == com.android.build.api.variant.FilterConfiguration.FilterType.ABI }
                     ?.identifier
-                val index = abiOrder.indexOf(abi)
-                if (index >= 0) {
-                    output.versionCode.set(appVersionCode * 10 + index + 1)
+                if (abi == null) {
+                    // the universal file carries every core, so it takes the last number
+                    output.versionCode.set(appVersionCode * 10 + abiOrder.size + 1)
+                } else {
+                    val index = abiOrder.indexOf(abi)
+                    if (index >= 0) {
+                        output.versionCode.set(appVersionCode * 10 + index + 1)
+                    }
                 }
             }
         }
