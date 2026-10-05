@@ -348,7 +348,15 @@ fun ProfileEditSheet(
                                 profile.copy(transport = profile.transport.copy(path = it))
                             }
                         },
-                        label = { Text(if (profile.transport.type == "grpc") "gRPC ServiceName" else "Path (e.g. /?ed=2560)") },
+                        label = {
+                            Text(
+                                if (profile.transport.type == "grpc") {
+                                    stringResource(R.string.field_grpc_service)
+                                } else {
+                                    stringResource(R.string.field_path_hint)
+                                },
+                            )
+                        },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                     )
@@ -572,7 +580,15 @@ private fun ProtocolPicker(value: Protocol, onChange: (Protocol) -> Unit) {
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             supportedProtocols.forEach { protocol ->
                 DropdownMenuItem(
-                    text = { Text(if (protocol == Protocol.CUSTOM) "custom (JSON)" else protocol.wire) },
+                    text = {
+                        Text(
+                            if (protocol == Protocol.CUSTOM) {
+                                stringResource(R.string.protocol_custom)
+                            } else {
+                                protocol.wire
+                            },
+                        )
+                    },
                     onClick = {
                         onChange(protocol)
                         expanded = false

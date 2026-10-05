@@ -112,7 +112,11 @@ fun SubscriptionsSheet(
                 }
 
                 Text(
-                    text = if (editingId == null) "Add Subscription" else "Edit Subscription",
+                    text = if (editingId == null) {
+                        stringResource(R.string.subscription_add_title)
+                    } else {
+                        stringResource(R.string.subscription_edit_title)
+                    },
                     style = MaterialTheme.typography.labelLarge,
                 )
                 OutlinedTextField(
@@ -126,7 +130,7 @@ fun SubscriptionsSheet(
                 OutlinedTextField(
                     value = url,
                     onValueChange = { url = it },
-                    label = { Text("Subscription URL (https://…)") },
+                    label = { Text(stringResource(R.string.sub_url_hint)) },
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth(),
@@ -162,7 +166,13 @@ fun SubscriptionsSheet(
                     }
                 },
             ) {
-                Text(if (editingId == null) "Close" else "Cancel edit")
+                Text(
+                    if (editingId == null) {
+                        stringResource(R.string.close)
+                    } else {
+                        stringResource(R.string.cancel_edit)
+                    },
+                )
             }
         },
     )
@@ -173,7 +183,7 @@ fun SubscriptionsSheet(
             shape = RoundedCornerShape(22.dp),
             title = { Text(stringResource(R.string.delete_subscription_705)) },
             text = {
-                Text("Delete ‘${subscription.remarks}’ and its imported servers? This cannot be undone.")
+                Text(stringResource(R.string.delete_subscription_body, subscription.remarks))
             },
             confirmButton = {
                 TextButton(

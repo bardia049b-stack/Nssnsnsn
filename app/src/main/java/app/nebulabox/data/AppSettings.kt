@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class AppSettings(
-    val settingsVersion: Int = 4,
+    val settingsVersion: Int = 5,
     val language: String = "system",
     val theme: String = "system",
     val dynamicColor: Boolean = false,
@@ -12,6 +12,8 @@ data class AppSettings(
     val useHevTun: Boolean = true,
     val socksPort: Int = 10808,
     val allowLan: Boolean = false,
+    val socksAuth: Boolean = true,
+    val socksPassword: String = "",
     val mtu: Int = 1500,
     val ipv6: Boolean = false,
     val preferIpv6: Boolean = false,
@@ -71,6 +73,13 @@ data class AppSettings(
     val selectedProfileId: String? = null,
     val selectedSubscriptionId: String = "",
 ) {
+    fun portPassword(): String? = if (socksAuth && socksPassword.isNotBlank()) socksPassword else null
+
+    private fun randomPassword(): String {
+        val alphabet = "abcdefghijkmnpqrstuvwxyz23456789"
+        return (1..16).map { alphabet.random() }.joinToString("")
+    }
+
     fun normalized(): AppSettings {
         val validMtu = if (mtu in 1280..1500) mtu else 1500
         val validPort = if (socksPort in 1024..65535) socksPort else 10808
@@ -88,6 +97,8 @@ data class AppSettings(
             remoteDns
         }
         val validDirectDns = if (directDns == "1.1.1.1" || directDns.isBlank()) "223.5.5.5" else directDns
+        // the local port is open to every app on the phone, so it asks for a password by default
+        val validPassword = socksPassword.ifBlank { randomPassword() }
         val validDelayUrl = if (delayTestUrl.isBlank() || delayTestUrl.contains("gstatic.com")) {
             "https://cp.cloudflare.com/generate_204"
         } else {
@@ -101,7 +112,8 @@ data class AppSettings(
             remoteDns == validRemoteDns &&
             directDns == validDirectDns &&
             delayTestUrl == validDelayUrl &&
-            autoPingMinutes == validPingMinutes
+            autoPingMinutes == validPingMinutes &&
+            socksPassword == validPassword
         ) {
             return this
         }
@@ -114,6 +126,7 @@ data class AppSettings(
             directDns = validDirectDns,
             delayTestUrl = validDelayUrl,
             autoPingMinutes = validPingMinutes,
+            socksPassword = validPassword,
             localDnsEnabled = false,
             tcpFastOpen = false,
             tcpMux = false,

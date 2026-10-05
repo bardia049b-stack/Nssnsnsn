@@ -1,23 +1,31 @@
 package app.nebulabox.ui
 
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -32,10 +40,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -112,39 +122,27 @@ fun RootScreen(
                     icon = {
                         Icon(
                             imageVector = Icons.Outlined.Dns,
-                            contentDescription = stringResource(R.string.servers),
+                            contentDescription = stringResource(R.string.tab_servers),
                         )
                     },
-                    label = { Text(stringResource(R.string.servers), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(stringResource(R.string.tab_servers), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
 
                 NavigationBarItem(
-                    selected = currentRoute == Route.ROUTING,
+                    selected = currentRoute == Route.ROUTING || currentRoute == Route.PER_APP,
                     onClick = { navController.goTo(Route.ROUTING) },
                     icon = {
                         Icon(
                             painter = painterResource(id = R.drawable.ic_routing_24dp),
-                            contentDescription = stringResource(R.string.routing),
+                            contentDescription = stringResource(R.string.tab_routing),
                         )
                     },
-                    label = { Text(stringResource(R.string.routing), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(stringResource(R.string.tab_routing), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
 
                 NavigationBarItem(
-                    selected = currentRoute == Route.PER_APP,
-                    onClick = { navController.goTo(Route.PER_APP) },
-                    icon = {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_per_apps_24dp),
-                            contentDescription = stringResource(R.string.per_app),
-                        )
-                    },
-                    label = { Text(stringResource(R.string.per_app), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                )
-
-                NavigationBarItem(
-                    selected = currentRoute == Route.LOGS,
-                    onClick = { navController.goTo(Route.LOGS) },
+                    selected = currentRoute == Route.SETTINGS || currentRoute == Route.LOGS,
+                    onClick = { navController.goTo(Route.SETTINGS) },
                     icon = {
                         BadgedBox(
                             badge = {
@@ -156,24 +154,12 @@ fun RootScreen(
                             },
                         ) {
                             Icon(
-                                painter = painterResource(id = R.drawable.ic_logcat_24dp),
-                                contentDescription = stringResource(R.string.logs),
+                                painter = painterResource(id = R.drawable.ic_settings_24dp),
+                                contentDescription = stringResource(R.string.tab_settings),
                             )
                         }
                     },
-                    label = { Text(stringResource(R.string.logs), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                )
-
-                NavigationBarItem(
-                    selected = currentRoute == Route.SETTINGS,
-                    onClick = { navController.goTo(Route.SETTINGS) },
-                    icon = {
-                        Icon(
-                            painter = painterResource(id = R.drawable.ic_settings_24dp),
-                            contentDescription = stringResource(R.string.settings),
-                        )
-                    },
-                    label = { Text(stringResource(R.string.settings), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    label = { Text(stringResource(R.string.tab_settings), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 )
             }
         },
@@ -208,26 +194,43 @@ fun RootScreen(
                 }
 
                 composable(Route.ROUTING) {
-                    SubScreenScaffold(title = stringResource(R.string.routing_fragment)) {
-                        RoutingFragmentScreen(viewModel)
-                    }
-                }
-
-                composable(Route.PER_APP) {
-                    SubScreenScaffold(title = stringResource(R.string.per_app_proxy)) {
-                        PerAppProxyScreen(viewModel)
+                    SubScreenScaffold(title = stringResource(R.string.tab_routing)) {
+                        var showPerApp by rememberSaveable { mutableStateOf(false) }
+                        Column(Modifier.fillMaxSize()) {
+                            SectionSwitch(
+                                labels = listOf(
+                                    stringResource(R.string.tab_routing),
+                                    stringResource(R.string.per_app_proxy),
+                                ),
+                                selectedIndex = if (showPerApp) 1 else 0,
+                                onSelect = { showPerApp = it == 1 },
+                            )
+                            Box(Modifier.fillMaxSize()) {
+                                if (showPerApp) {
+                                    PerAppProxyScreen(viewModel)
+                                } else {
+                                    RoutingFragmentScreen(viewModel)
+                                }
+                            }
+                        }
                     }
                 }
 
                 composable(Route.LOGS) {
-                    SubScreenScaffold(title = stringResource(R.string.logs_diagnostics)) {
+                    SubScreenScaffold(
+                        title = stringResource(R.string.logs_diagnostics),
+                        onBack = { navController.popBackStack() },
+                    ) {
                         LogsScreen(viewModel)
                     }
                 }
 
                 composable(Route.SETTINGS) {
                     SubScreenScaffold(title = stringResource(R.string.tab_settings)) {
-                        SettingsScreen(viewModel)
+                        SettingsScreen(
+                            viewModel = viewModel,
+                            onOpenLogs = { navController.goTo(Route.LOGS) },
+                        )
                     }
                 }
             }
@@ -257,10 +260,21 @@ fun RootScreen(
 @Composable
 private fun SubScreenScaffold(
     title: String,
+    onBack: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
+            navigationIcon = {
+                if (onBack != null) {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                            contentDescription = stringResource(R.string.back),
+                        )
+                    }
+                }
+            },
             title = {
                 Text(
                     text = title,
@@ -288,5 +302,50 @@ private fun NavController.goTo(route: String) {
         popUpTo(graph.startDestinationId) { saveState = true }
         launchSingleTop = true
         restoreState = true
+    }
+}
+
+@Composable
+private fun SectionSwitch(
+    labels: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        labels.forEachIndexed { index, label ->
+            val selected = index == selectedIndex
+            Surface(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable { onSelect(index) },
+                shape = RoundedCornerShape(12.dp),
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHigh
+                },
+                contentColor = if (selected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                )
+            }
+        }
     }
 }

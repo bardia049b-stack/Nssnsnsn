@@ -49,11 +49,12 @@ object ConnectionProbe {
         proxyPort: Int,
         testUrls: List<String>,
         attemptsPerUrl: Int = 2,
+        password: String? = null,
     ): Result {
         var last = Result(reachable = false, failure = Failure.UNKNOWN)
         for (url in testUrls.filter { it.isNotBlank() }) {
             repeat(attemptsPerUrl) {
-                val attempt = probe(url, proxyPort)
+                val attempt = probe(url, proxyPort, password)
                 if (attempt.reachable) return attempt
                 last = attempt
                 if (attempt.failure == Failure.REFUSED || attempt.failure == Failure.HANDSHAKE) return attempt
@@ -62,11 +63,12 @@ object ConnectionProbe {
         return last
     }
 
-    private fun probe(urlStr: String, proxyPort: Int): Result {
+    private fun probe(urlStr: String, proxyPort: Int, password: String?): Result {
         var conn: HttpURLConnection? = null
         val started = System.currentTimeMillis()
         return try {
-            val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort))
+            if (password != null) SocksAuth.install(SocksAuth.USER, password)
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort))
             conn = (URL(urlStr).openConnection(proxy) as HttpURLConnection).apply {
                 requestMethod = "GET"
                 connectTimeout = 6000
@@ -80,7 +82,6 @@ object ConnectionProbe {
             val delay = System.currentTimeMillis() - started
             when {
                 code in 200..399 -> Result(true, delay)
-                code == 204 -> Result(true, delay)
                 code == 407 || code == 403 -> Result(false, delay, Failure.REFUSED, "HTTP $code")
                 else -> Result(false, delay, Failure.UNKNOWN, "HTTP $code")
             }

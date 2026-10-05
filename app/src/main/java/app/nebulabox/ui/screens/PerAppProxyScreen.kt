@@ -161,9 +161,13 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
                     Spacer(Modifier.height(3.dp))
                     Text(
                         text = if (settings.perAppEnabled) {
-                            "${settings.perAppPackages.size} selected · ${settings.perAppModeLabel()} · reconnect to apply"
+                            stringResource(
+                                R.string.per_app_summary,
+                                settings.perAppPackages.size,
+                                settings.perAppModeLabel(),
+                            )
                         } else {
-                            "Off · selected apps are saved but not applied"
+                            stringResource(R.string.per_app_off_summary)
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = if (settings.perAppEnabled) {
@@ -370,8 +374,13 @@ fun PerAppProxyScreen(viewModel: NebulaViewModel) {
     }
 }
 
+@Composable
 private fun app.nebulabox.data.AppSettings.perAppModeLabel(): String =
-    if (perAppMode == "include") "Only selected apps" else "Bypass selected apps"
+    if (perAppMode == "include") {
+        stringResource(R.string.per_app_include)
+    } else {
+        stringResource(R.string.per_app_bypass)
+    }
 
 private fun drawableToImageBitmap(drawable: Drawable): ImageBitmap {
     if (drawable is BitmapDrawable && drawable.bitmap != null) {

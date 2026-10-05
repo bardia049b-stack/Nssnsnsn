@@ -101,6 +101,10 @@ object HevTunnel {
             appendLine("  port: ${settings.socksPort}")
             appendLine("  address: 127.0.0.1")
             appendLine("  udp: 'udp'")
+            if (settings.socksAuth) {
+                appendLine("  username: javidtun")
+                appendLine("  password: '${settings.socksPassword}'")
+            }
             appendLine("misc:")
             appendLine("  tcp-read-write-timeout: 300000")
             appendLine("  udp-read-write-timeout: 60000")

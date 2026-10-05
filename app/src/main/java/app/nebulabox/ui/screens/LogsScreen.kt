@@ -101,7 +101,7 @@ fun LogsScreen(viewModel: NebulaViewModel) {
                     fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    text = "${appLogs.size} logs · ${crashes.size} crashes",
+                    text = stringResource(R.string.logs_and_crashes, appLogs.size, crashes.size),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -156,7 +156,13 @@ fun LogsScreen(viewModel: NebulaViewModel) {
             Tab(
                 selected = selectedTab == 0,
                 onClick = { selectedTab = 0 },
-                text = { Text("Logs (${appLogs.size})", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                text = {
+                    Text(
+                        text = stringResource(R.string.logs_with_count, appLogs.size),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
             )
             Tab(
                 selected = selectedTab == 1,

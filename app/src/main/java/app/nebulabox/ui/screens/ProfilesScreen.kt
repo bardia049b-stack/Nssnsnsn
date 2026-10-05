@@ -301,7 +301,7 @@ fun ProfilesScreen(
                             color = MaterialTheme.colorScheme.onTertiaryContainer,
                         )
                         Text(
-                            text = "Installed build: ${BuildConfig.VERSION_NAME}",
+                            text = stringResource(R.string.installed_build, BuildConfig.VERSION_NAME),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer,
                         )
@@ -589,7 +589,7 @@ fun ProfilesScreen(
 
     pendingDeleteProfile?.let { profile ->
         ConfirmActionDialog(
-            title = "Delete ‘${profile.displayName}’?",
+            title = stringResource(R.string.delete_profile_title, profile.displayName),
             message = stringResource(R.string.this_configuration_will_be_removed_from_this_dev),
             onDismiss = { pendingDeleteProfile = null },
             onConfirm = {
@@ -602,7 +602,7 @@ fun ProfilesScreen(
     if (pendingDeleteIds.isNotEmpty()) {
         val count = pendingDeleteIds.size
         ConfirmActionDialog(
-            title = "Delete $count selected configurations?",
+            title = stringResource(R.string.delete_profiles_title, count),
             message = stringResource(R.string.this_action_cannot_be_undone),
             onDismiss = { pendingDeleteIds = emptySet() },
             onConfirm = {

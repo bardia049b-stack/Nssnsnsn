@@ -1,6 +1,8 @@
 package app.nebulabox.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -31,12 +33,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.res.stringResource
@@ -104,25 +113,46 @@ fun ConnectionDock(
         else -> MaterialTheme.colorScheme.outline
     }
 
-    val buttonColor = when {
-        busy -> MaterialTheme.colorScheme.primary
-        running && verified -> colorPing
-        running -> colorPing
-        failed -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.primary
-    }
+    val buttonColor by animateColorAsState(
+        targetValue = when {
+            failed -> MaterialTheme.colorScheme.error
+            running -> colorPing
+            else -> MaterialTheme.colorScheme.primary
+        },
+        animationSpec = tween(durationMillis = 300),
+        label = "power",
+    )
 
     val haptics = LocalHapticFeedback.current
-    val spin = rememberInfiniteTransition(label = "connect")
-    val angle by spin.animateFloat(
+
+    val ringColor = MaterialTheme.colorScheme.primary
+    val onlineColor = colorPing
+    val ringAngle by rememberInfiniteTransition(label = "connect").animateFloat(
         initialValue = 0f,
         targetValue = 360f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1000, easing = LinearEasing),
+            animation = tween(durationMillis = 1500, easing = LinearEasing),
             repeatMode = RepeatMode.Restart,
         ),
         label = "ring",
     )
+
+    val pulse = remember { Animatable(0f) }
+    LaunchedEffect(verified) {
+        if (!verified) return@LaunchedEffect
+        pulse.snapTo(0f)
+        pulse.animateTo(1f, tween(durationMillis = 650, easing = LinearEasing))
+    }
+
+    var firstFrame by remember { mutableStateOf(true) }
+    LaunchedEffect(running, busy) {
+        if (firstFrame) {
+            firstFrame = false
+            return@LaunchedEffect
+        }
+        if (busy) return@LaunchedEffect
+        haptics.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+    }
 
     val ping = activePingMs?.takeIf { it > 0L } ?: health.delayMs.takeIf { it > 0L }
 
@@ -145,32 +175,33 @@ fun ConnectionDock(
                 contentAlignment = Alignment.Center,
             ) {
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    val stroke = 4.dp.toPx()
-                    drawCircle(
-                        color = buttonColor.copy(alpha = if (busy) 0.85f else 0.25f),
-                        radius = size.minDimension / 2 - stroke / 2,
-                        style = androidx.compose.ui.graphics.drawscope.Stroke(
-                            width = stroke,
-                            cap = androidx.compose.ui.graphics.StrokeCap.Round,
-                            pathEffect = if (busy) {
-                                androidx.compose.ui.graphics.PathEffect.dashPathEffect(
-                                    floatArrayOf(size.minDimension / 6f, size.minDimension / 4f),
-                                )
-                            } else {
-                                null
-                            },
-                        ),
-                    )
+                    if (busy) {
+                        val stroke = 3.dp.toPx()
+                        drawArc(
+                            color = ringColor,
+                            startAngle = ringAngle,
+                            sweepAngle = 100f,
+                            useCenter = false,
+                            topLeft = Offset(stroke / 2, stroke / 2),
+                            size = Size(size.width - stroke, size.height - stroke),
+                            style = Stroke(width = stroke, cap = StrokeCap.Round),
+                        )
+                    }
+                    val progress = pulse.value
+                    if (progress > 0f) {
+                        drawCircle(
+                            color = onlineColor.copy(alpha = 0.30f * (1f - progress)),
+                            radius = size.minDimension / 2 - 3.dp.toPx() + 22.dp.toPx() * progress,
+                            style = Stroke(width = 2.dp.toPx()),
+                        )
+                    }
                 }
 
                 Surface(
                     modifier = Modifier
                         .size(BUTTON_SIZE)
                         .clip(CircleShape)
-                        .clickable(enabled = !busy) {
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onToggleService()
-                        },
+                        .clickable(enabled = !busy, onClick = onToggleService),
                     shape = CircleShape,
                     color = buttonColor,
                     contentColor = Color.White,

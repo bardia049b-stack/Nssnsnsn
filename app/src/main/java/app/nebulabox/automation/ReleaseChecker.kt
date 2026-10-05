@@ -41,13 +41,14 @@ object ReleaseChecker {
             val apks = (0 until (assets?.length() ?: 0))
                 .mapNotNull { assets?.optJSONObject(it) }
                 .filter { it.optString("name").endsWith(".apk", ignoreCase = true) }
+            val assetCode = apks.mapNotNull { parseBuildNumber(it.optString("name")) }.maxOrNull() ?: 0
             val wanted = preferredAbi()
             val apk = (apks.firstOrNull { it.optString("name").contains(wanted) } ?: apks.firstOrNull())
                 ?.optString("browser_download_url")
                 .orEmpty()
             UpdateInfo(
                 tag = tag,
-                buildNumber = parseBuildNumber(tag),
+                buildNumber = maxOf(parseBuildNumber(tag), assetCode),
                 releaseUrl = payload.optString("html_url").trim(),
                 apkUrl = apk,
                 notes = payload.optString("body").trim(),
@@ -69,10 +70,8 @@ object ReleaseChecker {
         }
     }
 
-    fun isNewer(info: UpdateInfo): Boolean {
-        val installed = parseBuildNumber(BuildConfig.VERSION_NAME)
-        return info.buildNumber > 0 && info.buildNumber > installed
-    }
+    fun isNewer(info: UpdateInfo): Boolean =
+        info.buildNumber > 0 && info.buildNumber > BuildConfig.RELEASE_CODE
 
     fun parseBuildNumber(version: String): Int {
         val match = VERSION_PATTERN.find(version.trim()) ?: return 0

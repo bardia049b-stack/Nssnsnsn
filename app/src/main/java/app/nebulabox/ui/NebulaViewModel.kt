@@ -31,6 +31,7 @@ import app.nebulabox.util.AppLogger
 import app.nebulabox.util.IpLocationChecker
 import app.nebulabox.util.ShareLinkParser
 import app.nebulabox.util.ConnectionProbe
+import app.nebulabox.util.SocksAuth
 import app.nebulabox.util.SubscriptionUsage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -230,7 +231,7 @@ class NebulaViewModel(
 
                 val (delayMs, loc) = coroutineScope {
                     val delayDeferred = async { engine.measureActiveDelay(url) }
-                    val locDeferred = async { IpLocationChecker.fetchLocation(currentSettings.socksPort) }
+                    val locDeferred = async { IpLocationChecker.fetchLocation(currentSettings.socksPort, currentSettings.portPassword()) }
                     delayDeferred.await() to locDeferred.await()
                 }
 
@@ -272,7 +273,7 @@ class NebulaViewModel(
 
             val (delayMs, loc) = coroutineScope {
                 val delayDeferred = async { engine.measureActiveDelay(url) }
-                val locDeferred = async { IpLocationChecker.fetchLocation(currentSettings.socksPort) }
+                val locDeferred = async { IpLocationChecker.fetchLocation(currentSettings.socksPort, currentSettings.portPassword()) }
                 delayDeferred.await() to locDeferred.await()
             }
 
@@ -905,7 +906,10 @@ class NebulaViewModel(
     private suspend fun fetchSubscription(urlStr: String): SubscriptionFetch = withContext(Dispatchers.IO) {
         val currentSettings = settingsStore.current().normalized()
         val proxy = if (status.value.state == TunnelState.STARTED) {
-            Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", currentSettings.socksPort))
+            run {
+                currentSettings.portPassword()?.let { SocksAuth.install(SocksAuth.USER, it) }
+                Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", currentSettings.socksPort))
+            }
         } else {
             Proxy.NO_PROXY
         }
@@ -946,7 +950,8 @@ class NebulaViewModel(
     private suspend fun fetchUrlContent(urlStr: String): String? = withContext(Dispatchers.IO) {
         val currentSettings = settingsStore.current().normalized()
         if (status.value.state == TunnelState.STARTED) {
-            val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", currentSettings.socksPort))
+            currentSettings.portPassword()?.let { SocksAuth.install(SocksAuth.USER, it) }
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", currentSettings.socksPort))
             httpFetch(urlStr, proxy)?.let { return@withContext it }
         }
         httpFetch(urlStr, Proxy.NO_PROXY)
@@ -1029,6 +1034,7 @@ class NebulaViewModel(
 
             val result = ConnectionProbe.verifyThroughProxy(
                 proxyPort = currentSettings.socksPort,
+                password = currentSettings.portPassword(),
                 testUrls = listOf(
                     currentSettings.delayTestUrl.ifBlank { "https://www.gstatic.com/generate_204" },
                     "http://cp.cloudflare.com/generate_204",

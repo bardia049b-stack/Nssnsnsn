@@ -20,6 +20,9 @@ import java.net.InetAddress
 
 object ConfigBuilder {
 
+    const val LOCAL_USER = "javidtun"
+
+
     fun build(profile: Profile, settings: AppSettings): String {
         val s = settings.normalized()
         if (profile.protocol == Protocol.CUSTOM && profile.customConfig.isNotBlank()) {
@@ -52,9 +55,19 @@ object ConfigBuilder {
                 protocol = "socks",
                 listen = if (settings.allowLan) "0.0.0.0" else TunnelConstants.LOOPBACK,
                 settings = CoreConfig.InboundBean.InSettingsBean(
-                    auth = "noauth",
+                    auth = if (settings.socksAuth) "password" else "noauth",
                     udp = true,
                     userLevel = 8,
+                    accounts = if (settings.socksAuth) {
+                        listOf(
+                            CoreConfig.InboundBean.InSettingsBean.SocksAccountBean(
+                                user = LOCAL_USER,
+                                pass = settings.socksPassword,
+                            ),
+                        )
+                    } else {
+                        null
+                    },
                 ),
                 sniffing = CoreConfig.InboundBean.SniffingBean(
                     enabled = settings.sniffing || settings.fakeDns,

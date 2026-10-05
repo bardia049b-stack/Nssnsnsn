@@ -32,9 +32,10 @@ object IpLocationChecker {
             }
     }
 
-    suspend fun fetchLocation(proxyPort: Int = LOCAL_MIXED_PORT): EndpointLocation? =
+    suspend fun fetchLocation(proxyPort: Int = LOCAL_MIXED_PORT, password: String? = null): EndpointLocation? =
         withContext(Dispatchers.IO) {
-            val proxy = Proxy(Proxy.Type.HTTP, InetSocketAddress("127.0.0.1", proxyPort))
+            if (password != null) SocksAuth.install(SocksAuth.USER, password)
+            val proxy = Proxy(Proxy.Type.SOCKS, InetSocketAddress("127.0.0.1", proxyPort))
 
             fetchFromIpApi(proxy)?.let { return@withContext it }
 

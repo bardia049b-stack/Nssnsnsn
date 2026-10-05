@@ -46,12 +46,19 @@ fun SettingsSectionCard(
     title: String,
     expanded: Boolean,
     onExpandedChange: (Boolean) -> Unit,
+    nested: Boolean = false,
+    collapsible: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .padding(
+                start = if (nested) 26.dp else 16.dp,
+                end = 16.dp,
+                top = 6.dp,
+                bottom = 6.dp,
+            ),
         shape = RoundedCornerShape(18.dp),
         color = MaterialTheme.colorScheme.surface,
         border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f)),
@@ -61,7 +68,7 @@ fun SettingsSectionCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
-                    .clickable { onExpandedChange(!expanded) }
+                    .clickable(enabled = collapsible) { onExpandedChange(!expanded) }
                     .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -72,12 +79,14 @@ fun SettingsSectionCard(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary,
                 )
-                Icon(
-                    imageVector = Icons.Filled.ExpandMore,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.rotate(if (expanded) 180f else 0f),
-                )
+                if (collapsible) {
+                    Icon(
+                        imageVector = Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.rotate(if (expanded) 180f else 0f),
+                    )
+                }
             }
             if (expanded) {
                 Column(

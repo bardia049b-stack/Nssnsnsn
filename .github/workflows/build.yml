@@ -3,6 +3,7 @@ name: Build and Release APK
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
   workflow_dispatch:
     inputs:
       build_type:
@@ -13,6 +14,14 @@ on:
         options:
         - release
         - debug
+      publish:
+        description: 'Also publish a release'
+        required: true
+        default: 'no'
+        type: choice
+        options:
+        - 'no'
+        - 'yes'
 
 permissions:
   contents: write
@@ -60,6 +69,16 @@ jobs:
       - name: Check the geo data
         run: python3 tools/check_geo_assets.py
 
+      - name: Read the version
+        id: version
+        run: |
+          set -eo pipefail
+          NAME=$(grep -E '^APP_VERSION_NAME=' gradle.properties | cut -d= -f2)
+          CODE=$(grep -E '^APP_VERSION_CODE=' gradle.properties | cut -d= -f2)
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          echo "JavidTun $NAME (code $CODE)"
+
       - name: Decode the signing keystore
         id: keystore
         if: ${{ (github.event.inputs.build_type || 'release') == 'release' }}
@@ -85,7 +104,7 @@ jobs:
             ./gradlew assembleFdroidDebug --no-daemon --stacktrace 2>&1 | tee build.log
           fi
 
-          VERSION="2.1.0-${GITHUB_RUN_NUMBER}"
+          VERSION="${{ steps.version.outputs.name }}-${{ steps.version.outputs.code }}"
           mkdir -p out
           for apk in app/build/outputs/apk/fdroid/*/*.apk; do
             [ -f "$apk" ] || continue
@@ -119,18 +138,25 @@ jobs:
               *) echo "::error::cannot tell the architecture of $name"; status=1; continue ;;
             esac
             entries=$(unzip -Z1 "$apk" | grep '^lib/' || true)
-            echo "$(basename "$apk"): $(stat -c%s "$apk") bytes"
+            code=$("$BT/aapt2" dump badging "$apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+            echo "$name: $(stat -c%s "$apk") bytes, versionCode $code"
             echo "$entries" | sed 's/^/  /'
             if ! echo "$entries" | grep -qx "lib/$abi/libgojni.so"; then
-              echo "::error::$(basename "$apk") does not carry lib/$abi/libgojni.so"
+              echo "::error::$name does not carry lib/$abi/libgojni.so"
               status=1
             fi
             others=$(echo "$entries" | sed -n 's|^lib/\([^/]*\)/.*|\1|p' | sort -u | grep -vx "$abi" || true)
             if [ -n "$others" ]; then
-              echo "::error::$(basename "$apk") also carries $others"
+              echo "::error::$name also carries $others"
               status=1
             fi
           done
+          codes=$(for apk in out/*.apk; do "$BT/aapt2" dump badging "$apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p"; done | sort -u | wc -l)
+          total=$(ls out/*.apk | wc -l)
+          if [ "$codes" -ne "$total" ]; then
+            echo "::error::the APKs do not all carry a version code of their own"
+            status=1
+          fi
           exit $status
 
       - name: Upload the APKs
@@ -152,7 +178,7 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-latest
-    if: ${{ (github.event.inputs.build_type || 'release') == 'release' }}
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish == 'yes' }}
 
     steps:
       - name: Download the APKs
@@ -160,6 +186,16 @@ jobs:
         with:
           name: javidtun-apks
           path: release
+
+      - name: Read the version
+        id: version
+        run: |
+          set -eo pipefail
+          NAME=$(ls release | sed -n 's/JavidTun-\([0-9.]*\)-\([0-9]*\)-fdroid.*/\1/p' | head -1)
+          CODE=$(ls release | sed -n 's/JavidTun-\([0-9.]*\)-\([0-9]*\)-fdroid.*/\2/p' | head -1)
+          echo "name=$NAME" >> $GITHUB_OUTPUT
+          echo "code=$CODE" >> $GITHUB_OUTPUT
+          echo "release $NAME (code $CODE)"
 
       - name: Sign the APKs and list their hashes
         env:
@@ -178,10 +214,10 @@ jobs:
       - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.1.0-${{ github.run_number }}
-          name: JavidTun v2.1.0-${{ github.run_number }}
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}-{1}', steps.version.outputs.name, steps.version.outputs.code) }}
+          name: JavidTun ${{ steps.version.outputs.name }}-${{ steps.version.outputs.code }}
           body: |
-            **JavidTun v2.1.0-${{ github.run_number }}**
+            **JavidTun ${{ steps.version.outputs.name }}** (build ${{ steps.version.outputs.code }})
 
             One APK per architecture, so the download only carries the core of your phone:
 
@@ -195,16 +231,15 @@ jobs:
             Every APK has a detached signature next to it (`*.apk.sig`) and the public key that
             verifies them is `JavidTun-public-key.asc`. The file `SHA256SUMS.txt` holds the hashes.
 
-            To check a download:
-
             ```
             gpg --import JavidTun-public-key.asc
             gpg --verify JavidTun-....apk.sig JavidTun-....apk
             sha256sum -c SHA256SUMS.txt
             ```
 
-            The core is Xray, built by the AndroidLibXrayLite project (tag `${{ env.CORE_VERSION }}`),
-            fetched and hash checked during the build.
+            The tunnel core is Xray, built by the AndroidLibXrayLite project (tag
+            `${{ env.CORE_VERSION }}`), fetched and hash checked during the build. See
+            `THIRD_PARTY_LICENSES.md` in the repository for the licences of everything inside.
           files: |
             release/*.apk
             release/*.sig

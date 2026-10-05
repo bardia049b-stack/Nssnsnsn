@@ -7,9 +7,9 @@ plugins {
 
 val coreArchive = file("libs/libv2ray.aar")
 val hasEngine: Boolean = coreArchive.exists()
-val githubRunNumber = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
-val appVersionCode = githubRunNumber ?: 3
-val appVersionName = githubRunNumber?.let { "2.1.0-$it" } ?: "2.1.0"
+val appVersionName: String = (findProperty("APP_VERSION_NAME") as String?) ?: "2.1.0"
+val appVersionCode: Int = (findProperty("APP_VERSION_CODE") as String?)?.toIntOrNull() ?: 1
+val abiOrder = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
 
 android {
     namespace = "app.nebulabox"
@@ -23,6 +23,7 @@ android {
         versionName = appVersionName
         resourceConfigurations += listOf("en", "fa")
         buildConfigField("boolean", "HAS_ENGINE", "$hasEngine")
+        buildConfigField("int", "RELEASE_CODE", "$appVersionCode")
     }
 
     signingConfigs {
@@ -30,9 +31,9 @@ android {
         if (localKeystore.exists()) {
             create("nebula") {
                 storeFile = localKeystore
-                storePassword = (findProperty("javidtun.storePassword") as String?) ?: "nebulabox"
-                keyAlias = (findProperty("javidtun.keyAlias") as String?) ?: "nebula"
-                keyPassword = (findProperty("javidtun.keyPassword") as String?) ?: "nebulabox"
+                storePassword = (findProperty("javidtun.storePassword") as String?) ?: ""
+                keyAlias = (findProperty("javidtun.keyAlias") as String?) ?: ""
+                keyPassword = (findProperty("javidtun.keyPassword") as String?) ?: ""
             }
         }
     }
@@ -97,6 +98,20 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    androidComponents {
+        onVariants { variant ->
+            variant.outputs.forEach { output ->
+                val abi = output.filters
+                    .find { it.filterType == com.android.build.api.variant.FilterConfiguration.FilterType.ABI }
+                    ?.identifier
+                val index = abiOrder.indexOf(abi)
+                if (index >= 0) {
+                    output.versionCode.set(appVersionCode * 10 + index + 1)
+                }
+            }
+        }
     }
 
     packaging {

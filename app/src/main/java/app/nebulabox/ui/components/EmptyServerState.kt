@@ -75,7 +75,11 @@ fun EmptyServerState(
                 Spacer(Modifier.height(2.dp))
 
                 Text(
-                    text = if (hasAnyProfiles) "No matching servers" else "No servers in this group",
+                    text = if (hasAnyProfiles) {
+                        stringResource(R.string.no_matching_servers)
+                    } else {
+                        stringResource(R.string.no_servers_in_group)
+                    },
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -83,9 +87,9 @@ fun EmptyServerState(
 
                 Text(
                     text = if (hasAnyProfiles) {
-                        "Try another search keyword or switch subscription tab."
+                        stringResource(R.string.empty_search_hint)
                     } else {
-                        "Paste a configuration from clipboard or import a subscription URL or JSON config."
+                        stringResource(R.string.empty_import_hint)
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
