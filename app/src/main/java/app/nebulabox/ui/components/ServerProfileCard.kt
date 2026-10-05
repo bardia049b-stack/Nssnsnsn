@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import app.nebulabox.R
 import app.nebulabox.data.Profile
 import app.nebulabox.ui.colorPing
+import app.nebulabox.ui.colorWarning
 import app.nebulabox.ui.colorPingRed
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -151,7 +152,7 @@ fun ServerProfileCard(
                 val tint = when {
                     isFailed -> colorPingRed
                     delay in 1..249 -> colorPing
-                    delay in 250..599 -> Color(0xFFF9A825)
+                    delay in 250..599 -> colorWarning
                     delay > 0 -> colorPingRed
                     else -> MaterialTheme.colorScheme.outline
                 }

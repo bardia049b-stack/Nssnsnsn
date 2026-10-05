@@ -428,7 +428,4 @@
     <string name="change_server">Change server</string>
     <string name="try_again">Try again</string>
     <string name="reconnect_gave_up">Could not reconnect after several tries</string>
-    <string name="kill_switch">Kill switch</string>
-    <string name="kill_switch_hint">Block traffic when the tunnel drops (system VPN settings)</string>
-    <string name="open_vpn_settings">Open VPN settings</string>
 </resources>

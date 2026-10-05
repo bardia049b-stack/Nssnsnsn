@@ -7,8 +7,11 @@ import androidx.compose.ui.graphics.Color
 val JavidOutlineLight = Color(0xFFC4C6D0)
 val JavidOutlineDark = Color(0xFF44474E)
 
-val JavidSuccess = Color(0xFF4CAF50)
-val JavidDanger = Color(0xFFF44336)
+val JavidSuccess = Color(0xFF2E7D32)
+val JavidSuccessDark = Color(0xFF66BB6A)
+val JavidWarning = Color(0xFFF9A825)
+val JavidDanger = Color(0xFFC62828)
+val JavidDangerDark = Color(0xFFEF5350)
 val JavidProtocolTag = Color(0xFF0B57D0)
 
 val JavidDarkColors = darkColorScheme(
@@ -24,9 +27,9 @@ val JavidDarkColors = darkColorScheme(
     onTertiary = Color(0xFF3B2948),
     tertiaryContainer = Color(0xFF523F5F),
     onTertiaryContainer = Color(0xFFF3DAFF),
-    background = Color(0xFF111318),
+    background = Color(0xFF0B0F17),
     onBackground = Color(0xFFE2E2E9),
-    surface = Color(0xFF111318),
+    surface = Color(0xFF0B0F17),
     onSurface = Color(0xFFE2E2E9),
     surfaceVariant = Color(0xFF44474E),
     onSurfaceVariant = Color(0xFFC4C6D0),
@@ -51,9 +54,9 @@ val JavidLightColors = lightColorScheme(
     onTertiary = Color(0xFFFFFFFF),
     tertiaryContainer = Color(0xFFF3DAFF),
     onTertiaryContainer = Color(0xFF251431),
-    background = Color(0xFFF8F9FF),
+    background = Color(0xFFF2F3F7),
     onBackground = Color(0xFF191C20),
-    surface = Color(0xFFF8F9FF),
+    surface = Color(0xFFF2F3F7),
     onSurface = Color(0xFF191C20),
     surfaceVariant = Color(0xFFE0E2EC),
     onSurfaceVariant = Color(0xFF44474E),

@@ -428,7 +428,4 @@
     <string name="change_server">تغییر سرور</string>
     <string name="try_again">تلاش دوباره</string>
     <string name="reconnect_gave_up">اتصال پس از چند تلاش برقرار نشد</string>
-    <string name="kill_switch">کیل‌سوییچ</string>
-    <string name="kill_switch_hint">قطع اینترنت هنگام افتادن تونل (تنظیمات VPN سیستم)</string>
-    <string name="open_vpn_settings">باز کردن تنظیمات VPN</string>
 </resources>

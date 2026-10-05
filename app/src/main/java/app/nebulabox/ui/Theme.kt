@@ -19,14 +19,21 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import app.nebulabox.ui.theme.JavidDarkColors
 import app.nebulabox.ui.theme.JavidDanger
+import app.nebulabox.ui.theme.JavidDangerDark
 import app.nebulabox.ui.theme.JavidLightColors
 import app.nebulabox.ui.theme.JavidOutlineDark
 import app.nebulabox.ui.theme.JavidOutlineLight
 import app.nebulabox.ui.theme.JavidProtocolTag
 import app.nebulabox.ui.theme.JavidSuccess
+import app.nebulabox.ui.theme.JavidSuccessDark
+import app.nebulabox.ui.theme.JavidWarning
 
-val colorPing = JavidSuccess
-val colorPingRed = JavidDanger
+val colorPing: Color
+    @Composable get() = if (LocalDarkTheme.current) JavidSuccessDark else JavidSuccess
+val colorPingRed: Color
+    @Composable get() = if (LocalDarkTheme.current) JavidDangerDark else JavidDanger
+val colorWarning: Color
+    @Composable get() = JavidWarning
 val colorConfigType = JavidProtocolTag
 val colorFabActive = JavidSuccess
 val colorFabInactiveLight = Color(0xFF0F172A)

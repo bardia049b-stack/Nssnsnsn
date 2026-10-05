@@ -49,6 +49,7 @@ import app.nebulabox.engine.TunnelState
 import app.nebulabox.engine.TunnelStatus
 import app.nebulabox.ui.NebulaViewModel
 import app.nebulabox.ui.colorPing
+import app.nebulabox.ui.colorWarning
 import app.nebulabox.ui.colorPingRed
 import app.nebulabox.util.Formatters
 import app.nebulabox.util.IpLocationChecker
@@ -272,7 +273,7 @@ fun ConnectionDock(
                                 fontWeight = FontWeight.SemiBold,
                                 color = when {
                                     ping < 250 -> colorPing
-                                    ping < 600 -> Color(0xFFF9A825)
+                                    ping < 600 -> colorWarning
                                     else -> colorPingRed
                                 },
                             )
