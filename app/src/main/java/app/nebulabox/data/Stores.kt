@@ -163,8 +163,12 @@ class ProfileStore(private val context: Context) {
 
     suspend fun updateDelays(results: Map<String, Int>, testedAt: Long = System.currentTimeMillis()) = write { list ->
         list.map { p ->
-            val delay = results[p.id]
-            if (delay != null) p.copy(lastDelayMs = delay, lastTestedAt = testedAt) else p
+            val delay = results[p.id] ?: return@map p
+            p.copy(
+                lastDelayMs = delay,
+                lastTestedAt = testedAt,
+                failureStreak = if (delay < 0) p.failureStreak + 1 else 0,
+            )
         }
     }
 
@@ -193,19 +197,27 @@ class ProfileStore(private val context: Context) {
         return removedCount
     }
 
-    suspend fun removeInvalid(ids: Set<String>? = null): Int {
+    /**
+     * A server is only dropped once it failed twice in a row, so a single bad round on a shaky
+     * network cannot throw the list away. When everything fails together it is this phone's problem
+     * and nothing is touched.
+     */
+    suspend fun removeInvalid(group: String? = null): Int {
         var removedCount = 0
         var refused = false
         write { list ->
-            val scope = if (ids == null) list else list.filter { it.id in ids }
-            val tested = scope.count { it.lastTestedAt > 0L }
+            val scope = if (group == null) list else list.filter { it.subscriptionId == group }
             val failed = scope.filter { it.lastTestedAt > 0L && it.lastDelayMs < 0 }
-            if (tested >= 3 && failed.size == tested) {
-                // Everything failed, which is what a dead connection or another VPN looks like.
+            if (failed.isEmpty()) return@write list
+            if (failed.size == scope.size) {
                 refused = true
                 return@write list
             }
-            val doomed = failed.mapTo(HashSet()) { it.id }
+            val doomed = failed.filter { it.failureStreak >= 2 }.mapTo(HashSet()) { it.id }
+            if (doomed.isEmpty()) {
+                AppLogger.i(TAG, "Nothing removed yet, every failing server has only one bad round behind it")
+                return@write list
+            }
             removedCount = doomed.size
             list.filterNot { it.id in doomed }.mapIndexed { idx, p -> p.copy(order = idx) }
         }

@@ -5,23 +5,6 @@ on:
     branches: [ main ]
     tags: [ 'v*' ]
   workflow_dispatch:
-    inputs:
-      build_type:
-        description: 'Build type'
-        required: true
-        default: 'release'
-        type: choice
-        options:
-        - release
-        - debug
-      publish:
-        description: 'Also publish a release'
-        required: true
-        default: 'no'
-        type: choice
-        options:
-        - 'no'
-        - 'yes'
 
 permissions:
   contents: write
@@ -31,9 +14,17 @@ env:
   CORE_SHA256: cf71680b776b9ca583747ba652f816b047a655eab875d8951e6141636d88bbd6
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+
+    env:
+      KEYSTORE_B64: ${{ secrets.APP_KEYSTORE_BASE64 }}
+      STORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+      KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      BUILD_NUMBER: ${{ github.run_number }}
 
     steps:
       - name: Checkout repository
@@ -49,7 +40,6 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Cache the Xray core
-        id: cache-core
         uses: actions/cache@v4
         with:
           path: app/libs/libv2ray.aar
@@ -69,67 +59,55 @@ jobs:
       - name: Check the geo data
         run: python3 tools/check_geo_assets.py
 
-      - name: Read the version
-        id: version
+      - name: Put the signing key in place
+        id: signing
         run: |
           set -eo pipefail
-          NAME=$(grep -E '^APP_VERSION_NAME=' gradle.properties | cut -d= -f2)
-          CODE=$(grep -E '^APP_VERSION_CODE=' gradle.properties | cut -d= -f2)
-          echo "name=$NAME" >> $GITHUB_OUTPUT
-          echo "code=$CODE" >> $GITHUB_OUTPUT
-          echo "JavidTun $NAME (code $CODE)"
+          if [ -n "$KEYSTORE_B64" ]; then
+            path="$RUNNER_TEMP/javidtun.jks"
+            printf '%s' "$KEYSTORE_B64" | base64 -d > "$path"
+            echo "signing with the key from the repository secrets"
+          else
+            path="$GITHUB_WORKSPACE/keystore/nebula.keystore"
+            echo "::warning::no keystore secret, falling back to the key inside the repository"
+          fi
+          if [ ! -f "$path" ]; then
+            echo "::error::there is no signing key, the apks would not be installable"
+            exit 1
+          fi
+          keytool -list -keystore "$path" -storepass "$STORE_PASSWORD" > /dev/null
+          echo "path=$path" >> "$GITHUB_OUTPUT"
 
-      - name: Decode the signing keystore
-        id: keystore
-        if: ${{ (github.event.inputs.build_type || 'release') == 'release' }}
-        uses: timheuer/base64-to-file@v2.0.0
-        with:
-          fileName: 'javidtun.jks'
-          encodedString: ${{ secrets.APP_KEYSTORE_BASE64 }}
-
-      - name: Build the APKs
-        id: build_apk
+      - name: Build one APK per architecture
         run: |
           set -eo pipefail
           chmod +x gradlew
-          BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
+          ./gradlew assembleFdroidRelease --no-daemon --stacktrace \
+            -Pandroid.injected.signing.store.file=${{ steps.signing.outputs.path }} \
+            -Pandroid.injected.signing.store.password="$STORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD" 2>&1 | tee build.log
 
-          if [ "$BUILD_TYPE" = "release" ]; then
-            ./gradlew assembleFdroidRelease --no-daemon --stacktrace \
-              -Pandroid.injected.signing.store.file=${{ steps.keystore.outputs.filePath }} \
-              -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
-              -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
-              -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }} 2>&1 | tee build.log
-          else
-            ./gradlew assembleFdroidDebug --no-daemon --stacktrace 2>&1 | tee build.log
-          fi
-
-          VERSION="${{ steps.version.outputs.name }}-${{ steps.version.outputs.code }}"
-          mkdir -p out
-          for apk in app/build/outputs/apk/fdroid/*/*.apk; do
-            [ -f "$apk" ] || continue
-            abi=$(basename "$apk" | sed -E 's/.*-(arm64-v8a|armeabi-v7a|x86_64|x86)-(release|debug)\.apk/\1/')
-            if [ "$abi" = "$(basename "$apk")" ]; then
-              echo "::warning::could not read the architecture from $(basename "$apk"), keeping the original name"
-              cp "$apk" "out/$(basename "$apk")"
-              continue
-            fi
-            cp "$apk" "out/JavidTun-${VERSION}-fdroid_${abi}.apk"
-          done
-          ls -lh out
-
-      - name: Check what is inside every APK
+      - name: Collect and check the APKs
         run: |
           set -eo pipefail
-          [ "${{ github.event.inputs.build_type || 'release' }}" = "release" ] || exit 0
+          VERSION=$(grep -E '^APP_VERSION_NAME=' gradle.properties | cut -d= -f2)
+          CODE=$(grep -E '^APP_VERSION_CODE=' gradle.properties | cut -d= -f2)
           BT=$(dirname "$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner | sort | tail -1)")
-          CODES=""
-          if [ -x "$BT/aapt2" ]; then CODES="$BT/aapt2 dump badging"; fi
-          for apk in out/*.apk; do
-            echo "--- $(basename "$apk")"
-            "$BT/apksigner" verify --print-certs "$apk" | grep -E "Verified using|Signer #1 certificate DN" || true
+          mkdir -p out
+          for apk in app/build/outputs/apk/fdroid/release/*.apk; do
+            [ -f "$apk" ] || continue
+            abi=$(basename "$apk" | sed -E 's/.*-(arm64-v8a|armeabi-v7a|x86_64|x86)\.apk/\1/')
+            if [ "$abi" = "$(basename "$apk")" ]; then
+              echo "::error::cannot tell the architecture of $(basename "$apk")"
+              exit 1
+            fi
+            cp "$apk" "out/JavidTun-${VERSION}-${CODE}-fdroid_${abi}.apk"
           done
+          ls -l out
+
           status=0
+          codes=""
           for apk in out/*.apk; do
             name=$(basename "$apk")
             case "$name" in
@@ -140,11 +118,10 @@ jobs:
               *) echo "::error::cannot tell the architecture of $name"; status=1; continue ;;
             esac
             entries=$(unzip -Z1 "$apk" | grep '^lib/' || true)
-            echo "$name: $(stat -c%s "$apk") bytes"
-            if [ -n "$CODES" ]; then
-              echo "  versionCode $($CODES "$apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
-            fi
-            echo "$entries" | sed 's/^/  /'
+            size=$(stat -c%s "$apk")
+            echo "--- $name ($size bytes)"
+            "$BT/apksigner" verify --print-certs "$apk" | grep -E "Verified using|Signer #1 certificate (DN|SHA-256)" | sed 's/^/    /' || true
+            echo "$entries" | sed 's/^/    /'
             if ! echo "$entries" | grep -qx "lib/$abi/libgojni.so"; then
               echo "::error::$name does not carry lib/$abi/libgojni.so"
               status=1
@@ -154,28 +131,35 @@ jobs:
               echo "::error::$name also carries $others"
               status=1
             fi
+            code=$("$BT/aapt2" dump badging "$apk" 2>/dev/null | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" || true)
+            echo "    versionCode ${code:-unknown}"
+            codes="$codes $code"
           done
           total=$(ls out/*.apk | wc -l)
           if [ "$total" -ne 4 ]; then
             echo "::error::expected four architectures, found $total"
             status=1
           fi
-          if [ -n "$CODES" ]; then
-            codes=$(for apk in out/*.apk; do $CODES "$apk" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p"; done | sort -u | wc -l)
-            if [ "$codes" -ne "$total" ]; then
-              echo "::error::the APKs do not all carry a version code of their own"
-              status=1
-            fi
+          unique=$(echo $codes | tr ' ' '\n' | sort -u | sed '/^$/d' | wc -l)
+          if [ "$unique" -ne "$total" ]; then
+            echo "::error::the four apks do not carry four different version codes"
+            status=1
           fi
           exit $status
 
-      - name: Upload the APKs
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: javidtun-apks
-          path: out/*.apk
-          retention-days: 30
+      - name: Sign everything for the release
+        run: |
+          set -eo pipefail
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          KEY=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+          echo "signing with $KEY"
+          for apk in out/*.apk; do
+            gpg --batch --yes --local-user "$KEY" --armor --detach-sign --output "$apk.sig" "$apk"
+          done
+          gpg --armor --export "$KEY" > out/JavidTun-public-key.asc
+          cd out
+          sha256sum *.apk > SHA256SUMS.txt
+          cat SHA256SUMS.txt
 
       - name: Upload the build log
         if: always()
@@ -185,61 +169,25 @@ jobs:
           path: build.log
           retention-days: 7
 
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    if: ${{ startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish == 'yes' }}
-
-    steps:
-      - name: Download the APKs
-        uses: actions/download-artifact@v4
-        with:
-          name: javidtun-apks
-          path: release
-
-      - name: Read the version
-        id: version
-        run: |
-          set -eo pipefail
-          NAME=$(ls release | sed -n 's/JavidTun-\([0-9.]*\)-\([0-9]*\)-fdroid.*/\1/p' | head -1)
-          CODE=$(ls release | sed -n 's/JavidTun-\([0-9.]*\)-\([0-9]*\)-fdroid.*/\2/p' | head -1)
-          echo "name=$NAME" >> $GITHUB_OUTPUT
-          echo "code=$CODE" >> $GITHUB_OUTPUT
-          echo "release $NAME (code $CODE)"
-
-      - name: Sign the APKs and list their hashes
-        env:
-          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        run: |
-          set -eo pipefail
-          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
-          KEY=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
-          echo "signing with $KEY"
-          for apk in release/*.apk; do
-            gpg --batch --yes --local-user "$KEY" --detach-sign --output "$apk.sig" "$apk"
-          done
-          gpg --armor --export "$KEY" > release/JavidTun-public-key.asc
-          cd release && sha256sum *.apk > SHA256SUMS.txt && cat SHA256SUMS.txt
-
       - name: Publish the release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('v{0}-{1}', steps.version.outputs.name, steps.version.outputs.code) }}
-          name: JavidTun ${{ steps.version.outputs.name }}-${{ steps.version.outputs.code }}
+          tag_name: v2.1.0-${{ env.BUILD_NUMBER }}
+          name: JavidTun 2.1.0-${{ env.BUILD_NUMBER }}
           body: |
-            **JavidTun ${{ steps.version.outputs.name }}** (build ${{ steps.version.outputs.code }})
+            **JavidTun 2.1.0** — build ${{ env.BUILD_NUMBER }}
 
-            One APK per architecture, so the download only carries the core of your phone:
+            یک فایل برای هر معماری، پس فقط هسته‌ی گوشی خودتان دانلود می‌شود:
 
-            | file | for |
+            | فایل | برای |
             | --- | --- |
-            | `...-fdroid_arm64-v8a.apk` | most phones of the last years |
-            | `...-fdroid_armeabi-v7a.apk` | older 32-bit phones |
-            | `...-fdroid_x86_64.apk` | emulators and tablets |
-            | `...-fdroid_x86.apk` | old emulators |
+            | `...-fdroid_arm64-v8a.apk` | بیشتر گوشی‌های امروزی |
+            | `...-fdroid_armeabi-v7a.apk` | گوشی‌های ۳۲ بیتی قدیمی‌تر |
+            | `...-fdroid_x86_64.apk` | شبیه‌سازها و تبلت‌ها |
+            | `...-fdroid_x86.apk` | شبیه‌سازهای قدیمی |
 
-            Every APK has a detached signature next to it (`*.apk.sig`) and the public key that
-            verifies them is `JavidTun-public-key.asc`. The file `SHA256SUMS.txt` holds the hashes.
+            هر فایل امضای جدا (`*.apk.sig`) و کلید عمومی (`JavidTun-public-key.asc`) دارد و
+            `SHA256SUMS.txt` هش همه‌ی فایل‌ها را نگه می‌دارد:
 
             ```
             gpg --import JavidTun-public-key.asc
@@ -247,14 +195,11 @@ jobs:
             sha256sum -c SHA256SUMS.txt
             ```
 
-            The tunnel core is Xray, built by the AndroidLibXrayLite project (tag
-            `${{ env.CORE_VERSION }}`), fetched and hash checked during the build. See
-            `THIRD_PARTY_LICENSES.md` in the repository for the licences of everything inside.
+            هسته‌ی تونل Xray است که پروژه‌ی AndroidLibXrayLite (تگ `${{ env.CORE_VERSION }}`) می‌سازد و
+            هنگام بیلد دانلود و هش‌بررسی می‌شود. مجوز همه‌چیز در `THIRD_PARTY_LICENSES.md` آمده است.
           files: |
-            release/*.apk
-            release/*.sig
-            release/JavidTun-public-key.asc
-            release/SHA256SUMS.txt
-          fail_on_unmatched_files: false
-          prerelease: false
-          draft: false
+            out/*.apk
+            out/*.sig
+            out/JavidTun-public-key.asc
+            out/SHA256SUMS.txt
+          fail_on_unmatched_files: true

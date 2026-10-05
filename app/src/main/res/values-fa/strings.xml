@@ -515,4 +515,6 @@
     <string name="dns_strategy_ipv6_only">فقط IPv6</string>
     <string name="dns_strategy_prefer_ipv4">IPv4 ترجیح داده شود</string>
     <string name="dns_strategy_prefer_ipv6">IPv6 ترجیح داده شود</string>
+    <string name="subscription_fallback_name">اشتراک</string>
+    <string name="custom_json_name">کانفیگ دلخواه</string>
 </resources>

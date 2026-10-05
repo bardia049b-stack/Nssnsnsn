@@ -49,6 +49,7 @@ fun ProfileEditSheet(
     onDismiss: () -> Unit,
     onSave: (Profile) -> Unit,
 ) {
+    val fallbackJsonName = stringResource(R.string.custom_json_name)
     val context = LocalContext.current
     var profile by remember {
         mutableStateOf(
@@ -487,7 +488,7 @@ fun ProfileEditSheet(
                             ShareLinkParser.parseJsonDocument(profile.customConfig).firstOrNull()
                         }.getOrNull()
                         profile.copy(
-                            name = profile.name.ifBlank { parsed?.name ?: "Custom JSON" },
+                            name = profile.name.ifBlank { parsed?.name ?: fallbackJsonName },
                             server = parsed?.server ?: profile.server,
                             serverPort = parsed?.serverPort ?: profile.serverPort,
                             customConfig = profile.customConfig.trim(),

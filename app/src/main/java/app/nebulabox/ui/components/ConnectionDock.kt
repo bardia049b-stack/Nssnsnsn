@@ -63,7 +63,7 @@ import app.nebulabox.ui.colorPingRed
 import app.nebulabox.util.Formatters
 import app.nebulabox.util.IpLocationChecker
 
-private val BUTTON_SIZE = 104.dp
+private val BUTTON_SIZE = 112.dp
 
 @Composable
 fun ConnectionDock(
@@ -215,7 +215,7 @@ fun ConnectionDock(
                             } else {
                                 stringResource(R.string.connect)
                             },
-                            modifier = Modifier.size(46.dp),
+                            modifier = Modifier.size(50.dp),
                         )
                     }
                 }

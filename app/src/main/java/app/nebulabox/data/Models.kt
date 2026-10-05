@@ -192,6 +192,8 @@ data class Profile(
     var lastTestedAt: Long = 0,
 
     var lastDelayMs: Int = 0,
+
+    var failureStreak: Int = 0,
 ) {
     val displayName: String
         get() = name.ifBlank {

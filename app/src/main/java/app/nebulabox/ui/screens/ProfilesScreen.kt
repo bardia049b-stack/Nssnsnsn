@@ -178,6 +178,14 @@ fun ProfilesScreen(
             ?: profiles.firstOrNull()
     }
 
+    // While the tunnel is up the dock shows the server it actually runs, not the row the finger
+    // touched last.
+    val dockProfile = if (status.state == TunnelState.STARTED || status.state == TunnelState.STARTING) {
+        status.profileId?.let { running -> profiles.firstOrNull { it.id == running } } ?: selectedProfile
+    } else {
+        selectedProfile
+    }
+
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri == null) return@rememberLauncherForActivityResult
         scope.launch {
@@ -246,7 +254,7 @@ fun ProfilesScreen(
 
         ConnectionDock(
             status = status,
-            activeProfileName = selectedProfile?.displayName,
+            activeProfileName = dockProfile?.displayName,
             activePingMs = activePingMs,
             isTestingActive = isTestingActive,
             testingProgress = testingProgress,

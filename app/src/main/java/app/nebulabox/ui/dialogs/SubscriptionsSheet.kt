@@ -43,6 +43,7 @@ fun SubscriptionsSheet(
     onUpdateAll: () -> Unit,
     onDeleteSubscription: (id: String, deleteProfiles: Boolean) -> Unit,
 ) {
+    val defaultName = stringResource(R.string.subscription_fallback_name)
     var remarks by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
     var editingId by remember { mutableStateOf<String?>(null) }
@@ -141,7 +142,7 @@ fun SubscriptionsSheet(
             TextButton(
                 onClick = {
                     val name = remarks.trim().ifBlank {
-                        runCatching { java.net.URL(url.trim()).host }.getOrDefault("Subscription")
+                        runCatching { java.net.URL(url.trim()).host }.getOrDefault(defaultName)
                     }
                     onSaveSubscription(editingId, name, url.trim())
                     remarks = ""

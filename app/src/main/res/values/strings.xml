@@ -515,4 +515,6 @@
     <string name="dns_strategy_ipv6_only">IPv6 only</string>
     <string name="dns_strategy_prefer_ipv4">Prefer IPv4</string>
     <string name="dns_strategy_prefer_ipv6">Prefer IPv6</string>
+    <string name="subscription_fallback_name">Subscription</string>
+    <string name="custom_json_name">Custom JSON</string>
 </resources>
