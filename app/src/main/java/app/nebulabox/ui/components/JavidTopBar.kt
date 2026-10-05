@@ -99,7 +99,7 @@ fun JavidTopBar(
                             ),
                             placeholder = {
                                 Text(
-                                    "Search servers...",
+                                    stringResource(R.string.search_servers),
                                     style = TextStyle(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 16.sp,
@@ -289,7 +289,6 @@ fun JavidTopBar(
                             onClick = { showMoreMenu = false; onRestartService() },
                         )
                         AppDivider()
-                        AppDivider()
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.export_configs_to_clipboard)) },
                             onClick = { showMoreMenu = false; onExportAll() },
@@ -305,7 +304,7 @@ fun JavidTopBar(
                         DropdownMenuItem(
                             text = {
                                 Text(
-                                    "Remove all configs",
+                                    stringResource(R.string.remove_all_configs),
                                     color = MaterialTheme.colorScheme.error,
                                 )
                             },

@@ -8,6 +8,7 @@ enum class TunnelState { STOPPED, STARTING, STARTED, STOPPING }
 data class TunnelStatus(
     val state: TunnelState = TunnelState.STOPPED,
     val profileName: String = "",
+    val profileId: String? = null,
     val uplink: Long = 0,
     val downlink: Long = 0,
     val uplinkTotal: Long = 0,
@@ -44,6 +45,9 @@ interface TunnelEngine {
     val functional: Boolean
 
     fun start(profileName: String, config: String, mtu: Int, openTun: () -> Boolean)
+
+    /** Lets the panel name the server the core is running even after the list was rewritten. */
+    fun setActiveProfileId(id: String?) {}
 
     fun stop()
     fun selectOutbound(groupTag: String, itemTag: String)

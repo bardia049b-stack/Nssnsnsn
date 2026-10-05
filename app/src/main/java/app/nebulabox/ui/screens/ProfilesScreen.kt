@@ -159,8 +159,9 @@ fun ProfilesScreen(
     }
 
     val listState = rememberLazyListState()
-    val firstProfileId = filteredProfiles.firstOrNull()?.id
-    LaunchedEffect(firstProfileId, filteredProfiles.size) {
+    // Only a change of group or search starts the list from the top again; a new ping result or a
+    // removed server must not pull the view away from where the user is reading.
+    LaunchedEffect(selectedSubId, searchQuery) {
         if (filteredProfiles.isNotEmpty()) {
             listState.scrollToItem(0)
         }
@@ -170,8 +171,11 @@ fun ProfilesScreen(
         subscriptions.associate { it.id to it.remarks }
     }
 
-    val selectedProfile = remember(profiles, settings.selectedProfileId) {
-        profiles.firstOrNull { it.id == settings.selectedProfileId } ?: profiles.firstOrNull()
+    val selectedProfile = remember(profiles, filteredProfiles, settings.selectedProfileId, status.profileId) {
+        profiles.firstOrNull { it.id == settings.selectedProfileId }
+            ?: status.profileId?.let { running -> profiles.firstOrNull { it.id == running } }
+            ?: filteredProfiles.firstOrNull()
+            ?: profiles.firstOrNull()
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -234,7 +238,7 @@ fun ProfilesScreen(
                     if (text.isBlank()) {
                         Toast.makeText(context, context.getString(R.string.no_shareable_profiles), Toast.LENGTH_SHORT).show()
                     } else {
-                        ClipboardHelper.copyText(context, "JavidTun Export", text)
+                        ClipboardHelper.copyText(context, context.getString(R.string.export_clipboard_label), text)
                     }
                 }
             },
@@ -249,11 +253,12 @@ fun ProfilesScreen(
             exitIpInfo = exitIpInfo,
             health = connectionHealth,
             onTestCurrentServer = { viewModel.testActiveConnectionDelay() },
+            onOpenServerList = { scope.launch { listState.animateScrollToItem(0) } },
             onToggleService = {
                 if (selectedProfile != null) {
                     viewModel.toggle(selectedProfile)
                 } else {
-                    viewModel.showSnack("Add or import a server first")
+                    viewModel.showSnack(context.getString(R.string.add_server_first))
                 }
             },
         )
@@ -291,7 +296,7 @@ fun ProfilesScreen(
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            text = "JavidTun ${update.tag} is available",
+                            text = stringResource(R.string.update_available_banner, update.tag),
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onTertiaryContainer,
                         )
@@ -333,7 +338,7 @@ fun ProfilesScreen(
                 Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                     Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
                         Text(
-                            text = "${selectedProfileIds.size} selected",
+                            text = stringResource(R.string.selected_count, selectedProfileIds.size),
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.weight(1f),
@@ -347,7 +352,13 @@ fun ProfilesScreen(
                                 }
                             },
                         ) {
-                            Text(if (selectedProfileIds.size == filteredProfiles.size) "Deselect all" else "Select all")
+                            Text(
+                                if (selectedProfileIds.size == filteredProfiles.size) {
+                                    stringResource(R.string.deselect_all)
+                                } else {
+                                    stringResource(R.string.select_all)
+                                },
+                            )
                         }
                     }
                     Row(
@@ -515,7 +526,7 @@ fun ProfilesScreen(
                 if (asSubscription && (text.startsWith("http://") || text.startsWith("https://"))) {
                     viewModel.addOrUpdateSubscription(
                         id = null,
-                        remarks = subRemarks.ifBlank { "Subscription" },
+                        remarks = subRemarks.ifBlank { context.getString(R.string.subscription_label) },
                         url = text.trim(),
                     )
                 } else {

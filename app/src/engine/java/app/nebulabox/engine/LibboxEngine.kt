@@ -6,7 +6,7 @@ import android.os.Build
 import android.system.OsConstants
 import app.nebulabox.Application
 import app.nebulabox.util.AppLogger
-import com.v2ray.ang.service.TProxyService
+import app.nebulabox.engine.HevTunnel
 import go.Seq
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +40,8 @@ class LibboxEngine : TunnelEngine {
     )
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    @Volatile
+    private var activeProfileId: String? = null
     private var statsJob: Job? = null
     @Volatile
     private var isInitialized = false
@@ -163,6 +165,10 @@ class LibboxEngine : TunnelEngine {
     override val functional: Boolean = true
 
     @Synchronized
+    override fun setActiveProfileId(id: String?) {
+        activeProfileId = id
+    }
+
     override fun start(
         profileName: String,
         config: String,
@@ -175,6 +181,7 @@ class LibboxEngine : TunnelEngine {
         status.value = TunnelStatus(
             state = TunnelState.STARTING,
             profileName = profileName,
+            profileId = activeProfileId,
         )
         emitLog(3, "Starting JavidTun Core for profile: $profileName")
 
@@ -215,6 +222,7 @@ class LibboxEngine : TunnelEngine {
             status.value = TunnelStatus(
                 state = TunnelState.STARTED,
                 profileName = profileName,
+            profileId = activeProfileId,
                 startedAt = startedAt,
             )
             emitLog(3, "JavidTun Core started successfully")
@@ -227,6 +235,7 @@ class LibboxEngine : TunnelEngine {
             status.value = TunnelStatus(
                 state = TunnelState.STOPPED,
                 profileName = profileName,
+            profileId = activeProfileId,
                 message = t.message ?: t.javaClass.simpleName,
             )
             throw t
@@ -238,7 +247,11 @@ class LibboxEngine : TunnelEngine {
         val currentName = status.value.profileName
         status.value = status.value.copy(state = TunnelState.STOPPING)
         stopInternal()
-        status.value = TunnelStatus(state = TunnelState.STOPPED, profileName = currentName)
+        status.value = TunnelStatus(
+            state = TunnelState.STOPPED,
+            profileName = currentName,
+            profileId = status.value.profileId,
+        )
         groups.value = emptyList()
     }
 
@@ -293,7 +306,7 @@ class LibboxEngine : TunnelEngine {
                 }
 
                 if (deltaUp == 0L && deltaDown == 0L) {
-                    val hevStats = TProxyService.getStats()
+                    val hevStats = HevTunnel.getStats()
                     if (hevStats != null && hevStats.size >= 4) {
                         val curUp = hevStats[1].coerceAtLeast(0L)
                         val curDown = hevStats[3].coerceAtLeast(0L)
@@ -313,6 +326,7 @@ class LibboxEngine : TunnelEngine {
                 if (current.state == TunnelState.STARTED) {
                     status.value = current.copy(
                         profileName = profileName,
+            profileId = activeProfileId,
                         startedAt = startedAt,
                         uplink = deltaUp,
                         downlink = deltaDown,

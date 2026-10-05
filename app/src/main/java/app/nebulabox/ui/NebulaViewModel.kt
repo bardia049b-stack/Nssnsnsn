@@ -1,7 +1,10 @@
 package app.nebulabox.ui
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -212,7 +215,7 @@ class NebulaViewModel(
             if (selected != null) {
                 testSingleProfileRealPing(selected)
             } else {
-                showSnack("No profile selected")
+                showSnack(application.getString(R.string.no_server_selected))
             }
             return
         }
@@ -361,9 +364,20 @@ class NebulaViewModel(
                 delay(minutes * 60_000L)
                 if (status.value.state != TunnelState.STARTED) continue
                 if (_testingProgress.value != null) continue
+                if (!onUnmeteredNetwork()) continue
                 pingStaleServers(minutes)
             }
         }
+    }
+
+    private fun onUnmeteredNetwork(): Boolean {
+        val manager = application.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return false
+        val network = manager.activeNetwork ?: return false
+        val capabilities = manager.getNetworkCapabilities(network) ?: return false
+        val wifi = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        return wifi || capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 
     private suspend fun pingStaleServers(minutes: Int) {
@@ -409,7 +423,7 @@ class NebulaViewModel(
                 if (subFilter.isBlank()) it.subscriptionId.isBlank() else it.subscriptionId == subFilter
             }
             if (targetList.isEmpty()) {
-                snack.emit("No profiles to test")
+                snack.emit(application.getString(R.string.no_profiles_to_test))
                 return@launch
             }
 
@@ -417,7 +431,6 @@ class NebulaViewModel(
             var completed = 0
             _testingProgress.value = 0 to total
 
-            profileStore.clearTestDelays(targetList.mapTo(HashSet()) { it.id })
             val semaphore = Semaphore(6)
 
             try {
@@ -468,7 +481,6 @@ class NebulaViewModel(
             val total = targetList.size
             var completed = 0
             _testingProgress.value = 0 to total
-            profileStore.clearTestDelays(targetList.mapTo(HashSet()) { it.id })
             val semaphore = Semaphore(12)
 
             try {
@@ -542,7 +554,7 @@ class NebulaViewModel(
 
     fun onVpnPermissionDenied() {
         pendingConnectId.value = null
-        viewModelScope.launch { snack.emit("VPN permission denied") }
+        viewModelScope.launch { snack.emit(application.getString(R.string.vpn_permission_denied)) }
     }
 
     fun disconnect() {
@@ -559,7 +571,7 @@ class NebulaViewModel(
                 delay(450L)
             }
             Actions.connect(application, selectedId)
-            snack.emit("Restarting service…")
+            snack.emit(application.getString(R.string.restarting_service))
         }
     }
 
@@ -615,7 +627,7 @@ class NebulaViewModel(
                 val replacement = profileStore.all().firstOrNull()?.id
                 settingsStore.update { it.copy(selectedProfileId = replacement) }
             }
-            snack.emit("Removed ${ids.size} configuration(s)")
+            snack.emit(application.getString(R.string.removed_count, ids.size))
         }
     }
 
@@ -642,7 +654,7 @@ class NebulaViewModel(
             settingsStore.update {
                 it.copy(selectedSubscriptionId = "", selectedProfileId = duplicate.id)
             }
-            snack.emit("Configuration duplicated to All")
+            snack.emit(application.getString(R.string.duplicated_to_all))
         }
     }
 
@@ -655,7 +667,7 @@ class NebulaViewModel(
             withContext(Dispatchers.IO) {
                 profileStore.sortByTestResults()
             }
-            snack.emit("Sorted by test results")
+            snack.emit(application.getString(R.string.sorted_by_results))
         }
     }
 
@@ -664,7 +676,7 @@ class NebulaViewModel(
             val count = withContext(Dispatchers.IO) {
                 profileStore.removeDuplicates()
             }
-            snack.emit("Removed $count duplicate configuration(s)")
+            snack.emit(application.getString(R.string.removed_duplicates_count, count))
         }
     }
 
@@ -673,7 +685,11 @@ class NebulaViewModel(
             val count = withContext(Dispatchers.IO) {
                 profileStore.removeInvalid()
             }
-            snack.emit("Removed $count invalid configuration(s)")
+            if (count < 0) {
+                snack.emit(application.getString(R.string.remove_invalid_all_failed))
+            } else {
+                snack.emit(application.getString(R.string.removed_invalid_count, count))
+            }
         }
     }
 
@@ -683,7 +699,7 @@ class NebulaViewModel(
                 val subFilter = settingsStore.current().selectedSubscriptionId
                 profileStore.clearGroup(subFilter)
             }
-            snack.emit("All configurations in current group removed")
+            snack.emit(application.getString(R.string.removed_group_all))
         }
     }
 
@@ -728,7 +744,7 @@ class NebulaViewModel(
             if (!fetched.isNullOrBlank()) {
                 val parsedSub = runCatching { ShareLinkParser.parseMany(fetched) }.getOrDefault(emptyList())
                 if (parsedSub.isNotEmpty()) {
-                    val hostName = runCatching { URL(trimmed).host }.getOrDefault("Subscription")
+                    val hostName = runCatching { URL(trimmed).host }.getOrDefault(application.getString(R.string.subscription_label))
                     val subItem = SubscriptionItem(
                         id = ShareLinkParser.newId(),
                         remarks = hostName,
@@ -783,7 +799,7 @@ class NebulaViewModel(
         if (cleanUrl.isEmpty()) return
         val subId = id ?: ShareLinkParser.newId()
         val name = remarks.trim().ifBlank {
-            runCatching { URL(cleanUrl).host }.getOrDefault("Subscription")
+            runCatching { URL(cleanUrl).host }.getOrDefault(application.getString(R.string.subscription_label))
         }
         launchLoading {
             _updatingSubscriptions.value = true
@@ -978,10 +994,26 @@ class NebulaViewModel(
                 }
                 profileStore.upsertSubscription(updated)
             }
+            realignSelectionAfterRefresh(subId)
             if (!settings.value.selectedProfileId.isNullOrBlank()) {
                 verifyConnection()
             }
         }
+    }
+
+    /**
+     * A refresh can drop the server the user is on. Whatever is left is picked by name so the panel
+     * and the tunnel do not end up pointing at two different servers.
+     */
+    private suspend fun realignSelectionAfterRefresh(subId: String) {
+        val all = profiles.value
+        val selectedId = settingsStore.current().selectedProfileId
+        if (selectedId != null && all.any { it.id == selectedId }) return
+        val remaining = all.filter { it.subscriptionId == subId }
+        if (remaining.isEmpty()) return
+        val replacement = remaining.first().id
+        AppLogger.i("NebulaViewModel", "The selected server was gone after the refresh, the selection moves to $replacement")
+        settingsStore.update { it.copy(selectedProfileId = replacement) }
     }
 
     private fun verifyConnection() {

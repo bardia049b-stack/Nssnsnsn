@@ -22,18 +22,37 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
         resourceConfigurations += listOf("en", "fa")
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
         buildConfigField("boolean", "HAS_ENGINE", "$hasEngine")
     }
 
     signingConfigs {
-        create("nebula") {
-            storeFile = file("../keystore/nebula.keystore")
-            storePassword = "nebulabox"
-            keyAlias = "nebula"
-            keyPassword = "nebulabox"
+        val localKeystore = file("../keystore/nebula.keystore")
+        if (localKeystore.exists()) {
+            create("nebula") {
+                storeFile = localKeystore
+                storePassword = (findProperty("javidtun.storePassword") as String?) ?: "nebulabox"
+                keyAlias = (findProperty("javidtun.keyAlias") as String?) ?: "nebula"
+                keyPassword = (findProperty("javidtun.keyPassword") as String?) ?: "nebulabox"
+            }
+        }
+    }
+
+    // One APK per architecture, so nobody downloads the cores of three other machines.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
+            isUniversalApk = false
+        }
+    }
+
+    flavorDimensions += "distribution"
+    productFlavors {
+        // Free software build: no proprietary dependencies, sources buildable by F-Droid.
+        create("fdroid") {
+            dimension = "distribution"
+            versionNameSuffix = ""
         }
     }
 
@@ -48,7 +67,7 @@ android {
             signingConfig = if (file("../keystore/nebula.keystore").exists()) {
                 signingConfigs.getByName("nebula")
             } else {
-                signingConfigs.getByName("debug")
+                null
             }
         }
         debug {

@@ -14,14 +14,17 @@ on:
         - release
         - debug
 
-jobs:
-  build-and-release:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+permissions:
+  contents: write
 
-    permissions:
-      contents: write
-      packages: write
+env:
+  CORE_VERSION: v26.9.30
+  CORE_SHA256: cf71680b776b9ca583747ba652f816b047a655eab875d8951e6141636d88bbd6
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     steps:
       - name: Checkout repository
@@ -36,87 +39,170 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Cache Core Archive
+      - name: Cache the Xray core
         id: cache-core
         uses: actions/cache@v4
         with:
           path: app/libs/libv2ray.aar
-          key: core-v26.9.30-v1
+          key: core-${{ env.CORE_VERSION }}-${{ env.CORE_SHA256 }}
 
-      - name: Download Core Archive
-        if: steps.cache-core.outputs.cache-hit != 'true'
+      - name: Fetch the Xray core
         run: |
-          mkdir -p ${{ github.workspace }}/app/libs
-          curl -fL --retry 3 -o ${{ github.workspace }}/app/libs/libv2ray.aar \
-            "https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.9.30/libv2ray.aar"
-          ls -lh ${{ github.workspace }}/app/libs/libv2ray.aar
+          set -eo pipefail
+          mkdir -p app/libs
+          if [ ! -f app/libs/libv2ray.aar ]; then
+            curl -fL --retry 3 -o app/libs/libv2ray.aar \
+              "https://github.com/2dust/AndroidLibXrayLite/releases/download/${{ env.CORE_VERSION }}/libv2ray.aar"
+          fi
+          echo "${{ env.CORE_SHA256 }}  app/libs/libv2ray.aar" | sha256sum -c -
+          ls -lh app/libs/libv2ray.aar
 
-      - name: Check geo data
-        run: python3 ${{ github.workspace }}/tools/check_geo_assets.py
+      - name: Check the geo data
+        run: python3 tools/check_geo_assets.py
 
-      - name: Grant execute permission
-        run: chmod +x ${{ github.workspace }}/gradlew
+      - name: Decode the signing keystore
+        id: keystore
+        if: ${{ (github.event.inputs.build_type || 'release') == 'release' }}
+        uses: timheuer/base64-to-file@v2.0.0
+        with:
+          fileName: 'javidtun.jks'
+          encodedString: ${{ secrets.APP_KEYSTORE_BASE64 }}
 
-      - name: Build APK
+      - name: Build the APKs
         id: build_apk
         run: |
           set -eo pipefail
-          cd ${{ github.workspace }}
-          ls -lh app/libs/libv2ray.aar
-          ls -lh app/src/main/jniLibs/arm64-v8a/libhev-socks5-tunnel.so
+          chmod +x gradlew
           BUILD_TYPE="${{ github.event.inputs.build_type || 'release' }}"
 
           if [ "$BUILD_TYPE" = "release" ]; then
-            ./gradlew assembleRelease --no-daemon --stacktrace 2>&1 | tee build.log
-            APK_PATH=$(find app/build/outputs/apk/release -name "*.apk" 2>/dev/null | head -1)
+            ./gradlew assembleFdroidRelease --no-daemon --stacktrace \
+              -Pandroid.injected.signing.store.file=${{ steps.keystore.outputs.filePath }} \
+              -Pandroid.injected.signing.store.password=${{ secrets.KEYSTORE_PASSWORD }} \
+              -Pandroid.injected.signing.key.alias=${{ secrets.KEY_ALIAS }} \
+              -Pandroid.injected.signing.key.password=${{ secrets.KEY_PASSWORD }} 2>&1 | tee build.log
           else
-            ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee build.log
-            APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" 2>/dev/null | head -1)
+            ./gradlew assembleFdroidDebug --no-daemon --stacktrace 2>&1 | tee build.log
           fi
 
-          if [ -n "$APK_PATH" ]; then
-            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-            APK_NAME="JavidTun-${BUILD_TYPE}-${SHORT_SHA}.apk"
-            cp "$APK_PATH" "$APK_NAME"
-            echo "apk_path=$APK_NAME" >> $GITHUB_OUTPUT
-            echo "::notice::APK built: $APK_NAME ($(stat -c%s "$APK_NAME") bytes)"
-          else
-            echo "::error::APK not found!"
-            find app/build/outputs -name "*.apk" || true
-            exit 1
-          fi
+          VERSION="2.1.0-${GITHUB_RUN_NUMBER}"
+          mkdir -p out
+          for apk in app/build/outputs/apk/fdroid/*/*.apk; do
+            [ -f "$apk" ] || continue
+            abi=$(basename "$apk" | sed -E 's/.*-(arm64-v8a|armeabi-v7a|x86_64|x86)-(release|debug)\.apk/\1/')
+            if [ "$abi" = "$(basename "$apk")" ]; then
+              echo "::warning::could not read the architecture from $(basename "$apk"), keeping the original name"
+              cp "$apk" "out/$(basename "$apk")"
+              continue
+            fi
+            cp "$apk" "out/JavidTun-${VERSION}-fdroid_${abi}.apk"
+          done
+          ls -lh out
 
-      - name: Upload APK Artifact
-        if: steps.build_apk.outputs.apk_path != ''
+      - name: Check what is inside every APK
+        run: |
+          set -eo pipefail
+          [ "${{ github.event.inputs.build_type || 'release' }}" = "release" ] || exit 0
+          BT=$(dirname "$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}/build-tools" -name apksigner | sort | tail -1)")
+          for apk in out/*.apk; do
+            echo "--- $(basename "$apk")"
+            "$BT/apksigner" verify --print-certs "$apk" | grep -E "Verified using|Signer #1 certificate DN" || true
+          done
+          status=0
+          for apk in out/*.apk; do
+            abi=$(basename "$apk" | sed -E 's/.*_([a-z0-9_-]+)\.apk/\1/')
+            entries=$(unzip -Z1 "$apk" | grep '^lib/' || true)
+            echo "$(basename "$apk"): $(stat -c%s "$apk") bytes"
+            echo "$entries" | sed 's/^/  /'
+            if ! echo "$entries" | grep -qx "lib/$abi/libgojni.so"; then
+              echo "::error::$(basename "$apk") does not carry lib/$abi/libgojni.so"
+              status=1
+            fi
+            others=$(echo "$entries" | sed -n 's|^lib/\([^/]*\)/.*|\1|p' | sort -u | grep -vx "$abi" || true)
+            if [ -n "$others" ]; then
+              echo "::error::$(basename "$apk") also carries $others"
+              status=1
+            fi
+          done
+          exit $status
+
+      - name: Upload the APKs
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: JavidTun-APK
-          path: ${{ steps.build_apk.outputs.apk_path }}
+          name: javidtun-apks
+          path: out/*.apk
           retention-days: 30
 
-      - name: Create GitHub Release
-        if: steps.build_apk.outputs.apk_path != ''
-        uses: softprops/action-gh-release@v2
-        with:
-          name: JavidTun v2.1.0-${{ github.run_number }}
-          tag_name: v2.1.0-${{ github.run_number }}
-          body: |
-            **JavidTun v2.1.0 build ${{ github.run_number }}**
-
-            - Smaller package: trimmed geoip data, no ML Kit, R8 shrinking
-            - Subscription quota bar with usage and expiry
-            - Connection is shown as online only after traffic really passes
-            - Persian interface
-          files: |
-            ${{ steps.build_apk.outputs.apk_path }}
-          fail_on_unmatched_files: false
-          prerelease: false
-          draft: false
-
-      - name: Upload build logs
+      - name: Upload the build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-logs
           path: build.log
           retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    if: ${{ (github.event.inputs.build_type || 'release') == 'release' }}
+
+    steps:
+      - name: Download the APKs
+        uses: actions/download-artifact@v4
+        with:
+          name: javidtun-apks
+          path: release
+
+      - name: Sign the APKs and list their hashes
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          set -eo pipefail
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          KEY=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+          echo "signing with $KEY"
+          for apk in release/*.apk; do
+            gpg --batch --yes --local-user "$KEY" --detach-sign --output "$apk.sig" "$apk"
+          done
+          gpg --armor --export "$KEY" > release/JavidTun-public-key.asc
+          cd release && sha256sum *.apk > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v2.1.0-${{ github.run_number }}
+          name: JavidTun v2.1.0-${{ github.run_number }}
+          body: |
+            **JavidTun v2.1.0-${{ github.run_number }}**
+
+            One APK per architecture, so the download only carries the core of your phone:
+
+            | file | for |
+            | --- | --- |
+            | `...-fdroid_arm64-v8a.apk` | most phones of the last years |
+            | `...-fdroid_armeabi-v7a.apk` | older 32-bit phones |
+            | `...-fdroid_x86_64.apk` | emulators and tablets |
+            | `...-fdroid_x86.apk` | old emulators |
+
+            Every APK has a detached signature next to it (`*.apk.sig`) and the public key that
+            verifies them is `JavidTun-public-key.asc`. The file `SHA256SUMS.txt` holds the hashes.
+
+            To check a download:
+
+            ```
+            gpg --import JavidTun-public-key.asc
+            gpg --verify JavidTun-....apk.sig JavidTun-....apk
+            sha256sum -c SHA256SUMS.txt
+            ```
+
+            The core is Xray, built by the AndroidLibXrayLite project (tag `${{ env.CORE_VERSION }}`),
+            fetched and hash checked during the build.
+          files: |
+            release/*.apk
+            release/*.sig
+            release/JavidTun-public-key.asc
+            release/SHA256SUMS.txt
+          fail_on_unmatched_files: false
+          prerelease: false
+          draft: false

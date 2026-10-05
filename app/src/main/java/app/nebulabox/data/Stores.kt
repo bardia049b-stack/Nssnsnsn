@@ -1,9 +1,11 @@
 package app.nebulabox.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import app.nebulabox.util.AppLogger
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -16,8 +18,17 @@ private val Context.settingsStore by preferencesDataStore(name = "settings")
 private val PROFILES_KEY = stringPreferencesKey("profiles")
 private val SUBSCRIPTIONS_KEY = stringPreferencesKey("subscriptions")
 private val SETTINGS_KEY = stringPreferencesKey("settings")
+private val PROFILES_RECOVERY_KEY = stringPreferencesKey("profiles_unreadable")
+
+private const val TAG = "ProfileStore"
 
 private val kjson = KJson { ignoreUnknownKeys = true; encodeDefaults = true }
+private val kjsonRelaxed = KJson {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+    isLenient = true
+    coerceInputValues = true
+}
 
 private val profileListSerializer = ListSerializer(Profile.serializer())
 private val subscriptionListSerializer = ListSerializer(SubscriptionItem.serializer())
@@ -27,12 +38,9 @@ class ProfileStore(private val context: Context) {
 
     val profiles: Flow<List<Profile>> = context.profileStore.data.map { prefs ->
         val raw = prefs[PROFILES_KEY] ?: return@map emptyList()
-        runCatching { kjson.decodeFromString(profileListSerializer, raw) }
-            .getOrDefault(emptyList())
-            .map { p ->
-
-                if (p.lastTestedAt == 0L && p.lastDelayMs < 0) p.copy(lastDelayMs = 0) else p
-            }
+        decodeProfiles(raw).orEmpty().map { p ->
+            if (p.lastTestedAt == 0L && p.lastDelayMs < 0) p.copy(lastDelayMs = 0) else p
+        }
     }
 
     val subscriptions: Flow<List<SubscriptionItem>> = context.profileStore.data.map { prefs ->
@@ -76,18 +84,33 @@ class ProfileStore(private val context: Context) {
         }
     }
 
+    /**
+     * A subscription refresh hands back freshly parsed entries with new ids. The servers that are
+     * still in the list keep the id they had, so the profile the tunnel is running, the one the user
+     * picked and the delay that was measured for it all survive the refresh.
+     */
     suspend fun replaceSubscriptionProfiles(subId: String, subUrl: String, newProfiles: List<Profile>) = write { list ->
+        val previous = list.filter { it.subscriptionId == subId }
+        val reused = HashSet<String>()
         val kept = list.filterNot { it.subscriptionId == subId }
         val baseOrder = kept.maxOfOrNull { it.order } ?: 0
-        kept + newProfiles.mapIndexed { index, profile ->
+        val refreshed = newProfiles.mapIndexed { index, profile ->
+            val match = previous.firstOrNull { it.id !in reused && it.duplicateKey() == profile.duplicateKey() }
+            if (match != null) reused.add(match.id)
             profile.copy(
+                id = match?.id ?: profile.id,
                 subscriptionId = subId,
                 subscriptionUrl = subUrl,
                 order = baseOrder + index + 1,
-                lastDelayMs = 0,
-                lastTestedAt = 0L,
+                lastDelayMs = match?.lastDelayMs ?: 0,
+                lastTestedAt = match?.lastTestedAt ?: 0L,
             )
         }
+        val droppedCount = previous.size - reused.size
+        if (refreshed.isNotEmpty()) {
+            AppLogger.i(TAG, "Subscription refreshed: ${refreshed.size} servers, ${reused.size} kept their identity, $droppedCount gone")
+        }
+        kept + refreshed
     }
 
     suspend fun upsert(profile: Profile) = write { list ->
@@ -170,15 +193,25 @@ class ProfileStore(private val context: Context) {
         return removedCount
     }
 
-    suspend fun removeInvalid(): Int {
+    suspend fun removeInvalid(ids: Set<String>? = null): Int {
         var removedCount = 0
+        var refused = false
         write { list ->
-            val kept = list.filter { p ->
-                val isFailed = p.lastDelayMs < 0
-                if (isFailed) removedCount++
-                !isFailed
+            val scope = if (ids == null) list else list.filter { it.id in ids }
+            val tested = scope.count { it.lastTestedAt > 0L }
+            val failed = scope.filter { it.lastTestedAt > 0L && it.lastDelayMs < 0 }
+            if (tested >= 3 && failed.size == tested) {
+                // Everything failed, which is what a dead connection or another VPN looks like.
+                refused = true
+                return@write list
             }
-            kept.mapIndexed { idx, p -> p.copy(order = idx) }
+            val doomed = failed.mapTo(HashSet()) { it.id }
+            removedCount = doomed.size
+            list.filterNot { it.id in doomed }.mapIndexed { idx, p -> p.copy(order = idx) }
+        }
+        if (refused) {
+            AppLogger.w(TAG, "Every tested server failed, keeping them all so a bad connection cannot delete the list")
+            return -1
         }
         return removedCount
     }
@@ -199,11 +232,21 @@ class ProfileStore(private val context: Context) {
         return parsed.size
     }
 
+    private fun decodeProfiles(raw: String): List<Profile>? =
+        runCatching { kjson.decodeFromString(profileListSerializer, raw) }.getOrNull()
+            ?: runCatching { kjsonRelaxed.decodeFromString(profileListSerializer, raw) }.getOrNull()
+
+    private fun keepUnreadableCopy(prefs: MutablePreferences, raw: String) {
+        prefs[PROFILES_RECOVERY_KEY] = raw
+        AppLogger.w(TAG, "The stored profile list could not be read, a copy of it is kept for recovery")
+    }
+
     private suspend fun write(transform: (List<Profile>) -> List<Profile>) {
         context.profileStore.edit { prefs ->
             val raw = prefs[PROFILES_KEY] ?: "[]"
-            val current = runCatching { kjson.decodeFromString(profileListSerializer, raw) }
-                .getOrDefault(emptyList())
+            val decoded = decodeProfiles(raw)
+            if (decoded == null && raw != "[]") keepUnreadableCopy(prefs, raw)
+            val current = decoded.orEmpty()
                 .map { p -> if (p.lastTestedAt == 0L && p.lastDelayMs < 0) p.copy(lastDelayMs = 0) else p }
             prefs[PROFILES_KEY] = kjson.encodeToString(profileListSerializer, transform(current))
         }

@@ -38,9 +38,11 @@ object ReleaseChecker {
             val tag = payload.optString("tag_name").trim()
             if (tag.isBlank()) return null
             val assets = payload.optJSONArray("assets")
-            val apk = (0 until (assets?.length() ?: 0))
+            val apks = (0 until (assets?.length() ?: 0))
                 .mapNotNull { assets?.optJSONObject(it) }
-                .firstOrNull { it.optString("name").endsWith(".apk", ignoreCase = true) }
+                .filter { it.optString("name").endsWith(".apk", ignoreCase = true) }
+            val wanted = preferredAbi()
+            val apk = (apks.firstOrNull { it.optString("name").contains(wanted) } ?: apks.firstOrNull())
                 ?.optString("browser_download_url")
                 .orEmpty()
             UpdateInfo(
@@ -54,6 +56,18 @@ object ReleaseChecker {
             runCatching { connection?.disconnect() }
         }
     }.getOrNull()
+
+    /** The release carries one APK per architecture, the phone should only be offered its own. */
+    private fun preferredAbi(): String {
+        val primary = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
+        return when {
+            primary.startsWith("arm64") -> "arm64-v8a"
+            primary.startsWith("armeabi") || primary.startsWith("arm") -> "armeabi-v7a"
+            primary.startsWith("x86_64") -> "x86_64"
+            primary.startsWith("x86") -> "x86"
+            else -> primary
+        }
+    }
 
     fun isNewer(info: UpdateInfo): Boolean {
         val installed = parseBuildNumber(BuildConfig.VERSION_NAME)

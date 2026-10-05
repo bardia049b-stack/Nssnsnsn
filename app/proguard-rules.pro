@@ -2,9 +2,9 @@
 
 -keep class go.** { *; }
 -keep class libv2ray.** { *; }
--keep class com.v2ray.ang.** { *; }
 
 -keep class app.nebulabox.** { *; }
+-keep class app.nebulabox.engine.HevTunnel { *; }
 
 -keepclassmembers class * extends androidx.work.ListenableWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
@@ -14,7 +14,6 @@
 
 -dontwarn go.**
 -dontwarn libv2ray.**
--dontwarn com.v2ray.ang.**
 -dontwarn org.conscrypt.**
 -dontwarn org.bouncycastle.**
 -dontwarn org.slf4j.**

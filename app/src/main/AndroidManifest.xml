@@ -17,7 +17,7 @@
 
     <application
         android:name=".Application"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
@@ -52,8 +52,6 @@
                 <data android:scheme="tuic" />
                 <data android:scheme="wireguard" />
                 <data android:scheme="socks" />
-                <data android:scheme="http" />
-                <data android:scheme="https" />
             </intent-filter>
 
             <intent-filter>

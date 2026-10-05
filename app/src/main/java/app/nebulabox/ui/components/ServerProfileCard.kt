@@ -34,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.stringResource
@@ -64,15 +65,15 @@ fun ServerProfileCard(
     val testResult = profile.testDelayString
 
     val cardColor = if (isSelected) {
-        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+        MaterialTheme.colorScheme.primaryContainer
     } else {
-        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+        MaterialTheme.colorScheme.surfaceContainerHigh
     }
 
     val borderStroke = if (isSelected) {
-        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.7f))
+        BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
     } else {
-        null
+        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
     }
 
     val subtitleText = remember(profile.typeDescription, subscriptionBadge) {
@@ -105,7 +106,7 @@ fun ServerProfileCard(
                 Checkbox(
                     checked = isChecked,
                     onCheckedChange = { onToggleSelected() },
-                    modifier = Modifier.size(32.dp),
+                    modifier = Modifier.size(40.dp),
                 )
                 Spacer(Modifier.width(8.dp))
             } else {
@@ -146,22 +147,36 @@ fun ServerProfileCard(
 
             if (testResult.isNotBlank()) {
                 val isFailed = profile.lastDelayMs < 0L
-                Text(
-                    text = testResult,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isFailed) colorPingRed else colorPing,
+                val delay = profile.lastDelayMs
+                val tint = when {
+                    isFailed -> colorPingRed
+                    delay in 1..249 -> colorPing
+                    delay in 250..599 -> Color(0xFFF9A825)
+                    delay > 0 -> colorPingRed
+                    else -> MaterialTheme.colorScheme.outline
+                }
+                Surface(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .clickable { onPingSingle() }
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
-                )
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onPingSingle() },
+                    shape = RoundedCornerShape(8.dp),
+                    color = tint.copy(alpha = 0.16f),
+                ) {
+                    Text(
+                        text = testResult,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = tint,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    )
+                }
+                Spacer(Modifier.width(6.dp))
             }
 
             Box {
                 IconButton(
                     onClick = { showMenu = true },
-                    modifier = Modifier.size(36.dp),
+                    modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.MoreVert,
